@@ -10,7 +10,7 @@ html, body {
 }
 
 body a {
-	color: grey;
+	color: #bf5700;
 	text-decoration: none;
 	cursor: pointer;
 }
@@ -54,7 +54,7 @@ body a {
 }
 
 .links a {
-	color: grey;
+	color: #bf5700;
 	text-decoration: none;
 	-o-transition: 0.6s;
 	-ms-transition: 0.6s;
