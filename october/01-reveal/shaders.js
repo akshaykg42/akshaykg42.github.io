@@ -43,39 +43,84 @@ float baseY(vec2 p) {
 }
 `;
 
-// waves: three in flight, each shoaling, pitching over, breaking into a bore and running up the sand
+// waves: four in flight. Each one shoals, pitches over, breaks into a bore, then runs up the sand
+// as a thin sheet that slows on the slope and drains back. Wave sizes vary and come in sets, and
+// the crest, break point and run-up all wander along the beach, so no two waves look the same.
+// main.js mirrors this maths (crestOff, runup, ...) for gameplay.
 export const WAVES = /* glsl */ `
 uniform float uTime;
-uniform float uWl;        // still-water level right now (tide + swash)
-uniform float uWlHigh;    // how far up the sand the swash reached lately
-uniform float uWaveShore; // where the waves run out of water (moves with the tide)
+uniform float uWl;        // still-water level (moves with the tide)
+uniform float uWlHigh;    // how far up the sand the tide reached lately
+uniform float uWaveShore; // where the still water meets the sand (moves with the tide)
 uniform vec3 uSunDir;
 
 const float WAVE_T = 7.0;
 
-// q.x = along the beach, q.y = metres offshore
-float breakers(vec2 q, float t, out float foam, out float glow, out float lean) {
+float waveAmp(float i) { return (0.7 + 0.55 * hash12(vec2(i, 3.7))) * (0.82 + 0.25 * sin(i * 0.83)); }
+// how far ahead of or behind the mean crest line this stretch of the wave is (metres)
+float crestOff(float i, float x) {
+	return (vnoise(vec2(x * 0.06, i * 1.7)) - 0.5) * 2.4 + (vnoise(vec2(x * 0.19, i * 1.7 + 5.0)) - 0.5) * 0.9;
+}
+// distance offshore of the mean crest at age tau (in wave periods); it reaches the waterline still moving
+float crestD(float tau) { return 46.0 * pow(max(1.0 - tau / 3.0, 0.0), 1.15) - 2.0; }
+
+// The run-up of wave i at s metres inland. Returns the sheet's thickness (0 if dry).
+// ff: foam at the leading edge; since: seconds since this spot drained (<0 while covered, 99 if never reached)
+float runup(float i, float tau, float x, float s, out float ff, out float since) {
+	ff = 0.0;
+	since = 99.0;
+	float off = crestOff(i, x);
+	float u0 = pow(clamp((2.0 - off) / 46.0, 0.001, 1.0), 1.0 / 1.15);
+	float ts = (tau - 3.0 * (1.0 - u0)) * WAVE_T;
+	if (ts <= 0.0) return 0.0;
+	float A = waveAmp(i);
+	float v0 = 46.0 * 1.15 / 3.0 * pow(u0, 0.15) / WAVE_T;
+	v0 *= sqrt(A) * (0.75 + 0.5 * vnoise(vec2(x * 0.16, i * 1.7 + 7.0)));
+	float g = 0.42 * (0.85 + 0.3 * vnoise(vec2(x * 0.33, i * 1.7 + 3.0)));
+	// cusps and fingers on the leading edge
+	float lobe = 1.0 + 0.16 * (vnoise(vec2(x * 1.1, i * 1.7 + 9.0)) - 0.5) + 0.07 * (vnoise(vec2(x * 4.0, i * 1.7)) - 0.5);
+	float sl = s / lobe;
+	float tmax = v0 / g;
+	float sf = max(v0 * ts - 0.5 * g * ts * ts, 0.0);
+	float smax = v0 * v0 / (2.0 * g);
+	if (sl < smax) {
+		float tu = (v0 + sqrt(max(v0 * v0 - 2.0 * g * max(sl, 0.0), 0.0))) / g;
+		float tc = (v0 - sqrt(max(v0 * v0 - 2.0 * g * max(sl, 0.0), 0.0))) / g;
+		since = ts < tc ? 99.0 : ts - tu;
+	}
+	if (sl >= sf) return 0.0;
+	float back = smoothstep(tmax * 0.7, tmax * 1.3, ts);
+	float u = max(sl, 0.0) / max(sf, 1e-3);
+	ff = (1.0 - back) * smoothstep(0.6, 1.0, u) + (1.0 - back) * 0.35 * (1.0 - u);
+	float h0 = A * 0.08 * exp(-ts * 0.2);
+	return h0 * pow(1.0 - u, 0.5) * mix(1.0, 0.35, back) + 0.0025;
+}
+
+// q.x = along the beach, q.y = metres offshore of the waterline
+float breakers(vec2 q, float t, out float foam, out float glow, out float lean, out float sheet) {
 	float h = 0.0;
 	foam = 0.0;
 	glow = 0.0;
 	lean = 0.0;
+	sheet = 0.0;
+	if (q.y > 70.0) return 0.0;
 	float ph = t / WAVE_T;
-	for (int k = 0; k < 3; k++) {
+	for (int k = 0; k < 4; k++) {
 		float i = floor(ph) - float(k);
-		float a = (ph - i) / 3.0;
+		float tau = ph - i;
+		float A = waveAmp(i);
 		float seed = i * 1.7;
-		float D = 44.0 * pow(1.0 - a, 1.25);
-		float crest = D + 0.9 * sin(q.x * 0.09 + seed) + 0.5 * sin(q.x * 0.23 - seed * 0.6);
-		float dBreak = 7.5 + 2.0 * sin(q.x * 0.05 + seed * 2.3) + 0.9 * sin(q.x * 0.13 + seed);
-		float broken = smoothstep(dBreak + 0.3, dBreak - 1.5, D);
-		float grow = smoothstep(44.0, dBreak, D);
-		float H = (0.08 + 0.42 * grow * grow) * (0.85 + 0.25 * sin(q.x * 0.07 + seed));
-		float bore = 0.03 + 0.13 * smoothstep(0.0, 7.0, D);
-		H = mix(H, bore * (0.9 + 0.2 * sin(q.x * 0.1 + seed)), broken);
-		H *= smoothstep(-0.5, 1.2, D) * smoothstep(44.0, 38.0, D);
+		float crest = crestD(tau) + crestOff(i, q.x);
+		float dBreak = 4.2 + 3.4 * A + (vnoise(vec2(q.x * 0.045, seed + 11.0)) - 0.5) * 4.5;
+		float broken = smoothstep(dBreak + 0.3, dBreak - 1.6, crest);
+		float grow = smoothstep(44.0, dBreak, crest);
+		float H = A * (0.06 + 0.36 * grow * grow) * (0.85 + 0.3 * vnoise(vec2(q.x * 0.11, seed + 2.0)));
+		float bore = A * (0.035 + 0.15 * smoothstep(0.0, 6.0, crest));
+		H = mix(H, bore, broken);
+		H *= smoothstep(-0.6, 1.2, crest) * smoothstep(44.0, 38.0, crest);
 		float dy = q.y - crest;
-		float front = mix(3.2, 0.85, grow * grow);
-		front = mix(front, 1.4, broken);
+		float front = mix(3.2, 0.8, grow * grow);
+		front = mix(front, 1.2, broken);
 		float back = mix(7.0, 3.5, grow);
 		float prof = dy < 0.0 ? exp(-dy * dy / (front * front)) : exp(-dy * dy / (back * back));
 		h += H * prof;
@@ -84,20 +129,59 @@ float breakers(vec2 q, float t, out float foam, out float glow, out float lean) 
 		lean += H * 0.9 * pitch * exp(-dy * dy / 0.18);
 		// sunlight through the thin face
 		glow += prof * (1.0 - smoothstep(-0.3, 0.5, dy)) * pitch;
-		// whitewater: a churning band at the bore, a fading wake behind it
-		float age = clamp((dBreak - D) / 7.0, 0.0, 1.0);
-		float band = smoothstep(-front * 1.1, -front * 0.15, dy) * (1.0 - smoothstep(0.3, 1.2 + 8.0 * age, dy));
-		foam += broken * band * (1.0 - 0.45 * age);
+		// whitewater: a churning band at the bore, and a fading, thinning wake behind it
+		float age = clamp((dBreak - crest) / 7.0, 0.0, 1.0);
+		float band = smoothstep(-front * 1.1, -front * 0.1, dy) * (1.0 - smoothstep(0.2, 1.0 + 9.0 * age, dy));
+		foam += broken * band * (1.0 - 0.5 * age) * smoothstep(-0.8, 0.6, crest);
 		// spray feathering off the lip
-		foam += smoothstep(dBreak + 2.5, dBreak, D) * (1.0 - broken) * exp(-pow((dy + 0.12) / 0.22, 2.0)) * 0.9;
+		foam += smoothstep(dBreak + 2.5, dBreak, crest) * (1.0 - broken) * exp(-pow((dy + 0.12) / 0.22, 2.0)) * 0.9;
+		// and up the sand
+		if (q.y < 0.6 && q.y > -7.0) {
+			float ff, since;
+			float sh = runup(i, tau, q.x, -q.y, ff, since);
+			sheet = max(sheet, sh);
+			foam = max(foam, ff);
+		}
 	}
 	return h;
 }
 
+// how wet the sand is from recent run-ups (wet), and whether it's still glassy from one just now (film)
+float swashWet(vec2 q, float t, out float film, out float sheet) {
+	float wet = 0.0;
+	film = 0.0;
+	sheet = 0.0;
+	float ph = t / WAVE_T;
+	for (int k = 0; k < 6; k++) {
+		float i = floor(ph) - float(k);
+		float ff, since;
+		float sh = runup(i, ph - i, q.x, -q.y, ff, since);
+		sheet = max(sheet, sh);
+		if (since < 98.0) {
+			float d = max(since, 0.0);
+			wet = max(wet, exp(-d / 45.0));
+			film = max(film, exp(-d / 1.8));
+		}
+	}
+	return wet;
+}
+
 float swell(vec2 p, float t) {
-	return 0.05 * sin(-p.y * 0.26 + t * 1.1 + vnoise(p * 0.03) * 3.0)
-	     + 0.04 * sin(dot(p, vec2(0.09, -0.17)) + t * 0.9)
-	     + 0.03 * sin(dot(p, vec2(-0.13, -0.21)) + t * 1.3);
+	return 0.045 * sin(-p.y * 0.26 + t * 1.1 + vnoise(p * 0.03) * 3.0)
+	     + 0.035 * sin(dot(p, vec2(0.09, -0.17)) + t * 0.9)
+	     + 0.025 * sin(dot(p, vec2(-0.13, -0.21)) + t * 1.3)
+	     + 0.018 * sin(dot(p, vec2(0.27, -0.33)) + t * 1.7 + vnoise(p * 0.05) * 2.0)
+	     + 0.012 * sin(dot(p, vec2(-0.41, -0.29)) + t * 2.1);
+}
+
+// the water surface height at a point on the beach or out to sea
+float seaSurface(vec2 xz, float ground, float t, out float foam, out float glow, out float lean) {
+	vec2 q = vec2(xz.x, uWaveShore - xz.y);
+	float sheet;
+	float bh = breakers(q, t, foam, glow, lean, sheet);
+	float ySea = uWl + bh + swell(xz, t) * smoothstep(2.0, 14.0, q.y);
+	float yLand = ground + sheet - 0.03 * (1.0 - smoothstep(0.0, 0.004, sheet));
+	return max(ySea, yLand);
 }
 
 float vorEdge(vec2 x, float t) {
@@ -401,9 +485,11 @@ float sDist = length(vWPos - cameraPosition);
 	sAlb *= grain;
 }
 float sEdge = (fbm3(vec2(sp.x * 0.8, uTime * 0.22)) - 0.5) * 0.015;
-float sAbove = vWPos.y - (uWl + sEdge);
-float sWet = 1.0 - smoothstep(0.0, 0.03, vWPos.y - (uWlHigh + sEdge));
-float sFilm = sWet * exp(-max(sAbove, 0.0) / 0.006);
+// wet where the run-ups have reached lately (darkest just after one drains), and below the tide line
+float sFilm = 0.0, sSheet = 0.0;
+vec2 sq = vec2(sp.x, uWaveShore - sp.y);
+float sWet = sq.y > -7.0 ? swashWet(sq, uTime, sFilm, sSheet) : 0.0;
+sWet = max(sWet * (0.75 + 0.25 * sFilm), 1.0 - smoothstep(0.0, 0.03, vWPos.y - (uWlHigh + sEdge)));
 sAlb *= mix(vec3(1.0), vec3(0.50, 0.51, 0.53), sWet);
 diffuseColor.rgb = sAlb;
 `;
@@ -411,7 +497,7 @@ diffuseColor.rgb = sAlb;
 export const SAND_FRAG_ROUGH = /* glsl */ `
 // dry sand is matte; sand the swash just left is glassy, then dulls as it drains
 float roughnessFactor = mix(0.97, 0.42, sWet);
-roughnessFactor = mix(roughnessFactor, 0.07, max(sFilm, sWet * smoothstep(0.03, 0.0, vWPos.y - uWlHigh) * 0.85));
+roughnessFactor = mix(roughnessFactor, 0.07, sFilm);
 `;
 
 export const SAND_FRAG_NORMAL = /* glsl */ `
@@ -433,9 +519,7 @@ export const SAND_FRAG_NORMAL = /* glsl */ `
 
 export const SAND_FRAG_EMISSIVE = /* glsl */ `
 if (vWPos.y < uWl + 0.6) {
-	float bf, bg, bl;
-	float ws = uWl + breakers(vec2(sp.x, uWaveShore - sp.y), uTime, bf, bg, bl);
-	float wd = ws - vWPos.y;
+	float wd = max(uWl - vWPos.y, sSheet);
 	if (wd > 0.0) {
 		float ca = caustics(sp, uTime);
 		totalEmissiveRadiance += sAlb * uCausticCol * ca * smoothstep(0.0, 0.06, wd) * exp(-wd * 0.6) * sVis;
@@ -456,17 +540,31 @@ reflectedLight.directDiffuse += sAlb * 0.3 * sPit;
 // ---------- the sea surface ----------
 export const WATER_VERT = /* glsl */ `
 ${NOISE}
+${GROUND}
 ${WAVES}
 varying vec3 vW;
 varying vec2 vQ;
 varying float vViewZ;
+varying vec3 vN;
+varying float vFoam;
+varying float vGlow;
+float groundAt(vec2 p) { return uWaveShore - p.y > 1.5 ? baseY(p) : baseY(p) + (fbm(p * 0.35) - 0.5) * 0.10; }
+vec3 surfAt(vec2 xz, out float foam, out float glow) {
+	float l;
+	float y = seaSurface(xz, groundAt(xz), uTime, foam, glow, l);
+	return vec3(xz.x, y, xz.y + l);
+}
 void main() {
 	vec4 wp = modelMatrix * vec4(position, 1.0);
-	vec2 q = vec2(wp.x, uWaveShore - wp.z);
-	float f, g, l;
-	float bh = breakers(q, uTime, f, g, l);
-	float y = uWl + bh + swell(wp.xz, uTime) * smoothstep(2.0, 14.0, q.y);
-	vec3 p = vec3(wp.x, y, wp.z + l);
+	float foam, glow, f2, g2;
+	vec3 p = surfAt(wp.xz, foam, glow);
+	// the surface normal from neighbouring heights, a bit wider far away so distant chop doesn't alias
+	float e = 0.06 + length(wp.xz - cameraPosition.xz) * 0.004;
+	vec3 px = surfAt(wp.xz + vec2(e, 0.0), f2, g2);
+	vec3 pz = surfAt(wp.xz + vec2(0.0, e), f2, g2);
+	vN = normalize(cross(pz - p, px - p));
+	vFoam = foam;
+	vGlow = glow;
 	vQ = wp.xz;
 	vW = p;
 	vec4 mv = viewMatrix * vec4(p, 1.0);
@@ -491,14 +589,9 @@ uniform vec3 uSunCol;
 varying vec3 vW;
 varying vec2 vQ;
 varying float vViewZ;
-
-vec3 surfP(vec2 xz, out float foam, out float glow) {
-	float l;
-	vec2 q = vec2(xz.x, uWaveShore - xz.y);
-	float bh = breakers(q, uTime, foam, glow, l);
-	float y = uWl + bh + swell(xz, uTime) * smoothstep(2.0, 14.0, q.y);
-	return vec3(xz.x, y, xz.y + l);
-}
+varying vec3 vN;
+varying float vFoam;
+varying float vGlow;
 float detailH(vec2 p, float t) {
 	return 0.030 * vnoise(p * 1.1 + t * vec2(0.15, 0.55))
 	     + 0.012 * vnoise(p * 2.7 + t * vec2(-0.35, 0.7))
@@ -515,14 +608,8 @@ void main() {
 	float dist = length(V);
 	V /= dist;
 
-	float foam, glow, f2, g2;
-	// widen the normal footprint with the pixel footprint so far chop doesn't alias into speckle
-	vec2 fw = fwidth(vQ);
-	float e = max(0.05 + dist * 0.003, max(fw.x, fw.y) * 1.2);
-	vec3 P0 = surfP(vQ, foam, glow);
-	vec3 Px = surfP(vQ + vec2(e, 0.0), f2, g2);
-	vec3 Pz = surfP(vQ + vec2(0.0, e), f2, g2);
-	vec3 n = normalize(cross(Pz - P0, Px - P0));
+	float foam = vFoam, glow = vGlow;
+	vec3 n = normalize(vN);
 	float lod = exp(-dist / 45.0);
 	float de = 0.03;
 	float d0 = detailH(vQ, t);
@@ -572,7 +659,10 @@ void main() {
 	float sharp = pow(sd, 1800.0) * 14.0 * exp(-dist / 70.0);
 	col += uSunCol * (sharp + pow(sd, 160.0) * 0.06 + pow(sd, 24.0) * 0.03 * smoothstep(40.0, 400.0, dist)) * smoothstep(0.0, 0.02, vEdge);
 	// the face of a wave about to break, lit green from behind
-	col = mix(col, vec3(0.035, 0.26, 0.21) * 1.3, clamp(glow, 0.0, 1.0) * 0.6);
+	// a steep face turned toward you shows a wall of deeper water instead of the sky
+	float face = smoothstep(0.08, 0.45, n.z) * smoothstep(1.0, 4.0, offshore);
+	col = mix(col, vec3(0.018, 0.085, 0.095), face * 0.6);
+	col = mix(col, vec3(0.03, 0.15, 0.14), clamp(glow, 0.0, 1.0) * 0.4);
 
 	// foam: lace at the waterline, whitewater where waves have broken
 	vec2 fp = mat2(0.8, -0.6, 0.6, 0.8) * vQ;
@@ -583,11 +673,11 @@ void main() {
 	float le = vorEdge(lq, t * 0.2);
 	float le2 = vorEdge(lq * 2.4 + 5.0, t * 0.3);
 	float shore = 1.0 - smoothstep(0.0, 0.05, vEdge);
-	float fa = clamp(max(foam * 1.3, shore * 0.8), 0.0, 1.0);
+	float fa = clamp(max(foam * 1.3, shore * 0.3), 0.0, 1.0);
 	float lw = 0.015 + 0.3 * fa * fa;
 	float lines = max(1.0 - smoothstep(0.0, lw, le), (1.0 - smoothstep(0.0, lw * 0.7, le2)) * 0.55);
 	// broken up: patches of net, thin streaks, and bare water in between
-	float mask = smoothstep(0.38, 0.62, fbm3(vQ * vec2(1.1, 1.6) + vec2(0.0, t * 0.08)) + fa * 0.45);
+	float mask = smoothstep(0.45, 0.68, fbm3(vQ * vec2(1.1, 1.6) + vec2(0.0, t * 0.08)) + fa * 0.4);
 	float bub = step(0.955, hash12(floor(vQ * 140.0 + vec2(0.0, t * 3.0)))) * smoothstep(0.3, 0.7, fbm3(vQ * 2.5));
 	float lace = max(lines * mask, bub * 0.7) * (0.65 + 0.35 * vnoise(vQ * 9.0));
 	float white = fa * mix(lace, 1.0, smoothstep(0.75, 1.0, fa * (0.7 + 0.5 * fn)));

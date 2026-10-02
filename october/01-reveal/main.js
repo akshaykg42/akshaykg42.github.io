@@ -173,7 +173,7 @@ const U = {
 	uWaveShore: { value: SHORE_Z },
 	uTime: { value: 0 },
 	uWl: { value: 0 },
-	uWlHigh: { value: 0.13 },
+	uWlHigh: { value: 0.03 },
 	uSunDir: { value: SUN_DIR }
 };
 
@@ -387,7 +387,8 @@ sceneRT.depthTexture.type = THREE.UnsignedIntType;
 const waterGeo = (() => {
 	const xs = symmetric(ramp(11, 0.11, 1.04, 3600));
 	const surf = [];
-	for (let z = SHORE_Z + 9; z > SHORE_Z - 26; z -= 0.1) surf.push(z);
+	const row = isTouch ? 0.14 : 0.1;
+	for (let z = SHORE_Z + 9; z > SHORE_Z - 26; z -= row) surf.push(z);
 	const out = ramp(0, 0.12, 1.035, 3600).map((v) => SHORE_Z - 26 - v);
 	return gridGeo(xs, surf.concat(out).reverse());
 })();
@@ -681,31 +682,61 @@ function findJingle(tier) {
 }
 
 // ---------- the sea: waves, swash and tide ----------
+// waves: the same maths as WAVES in shaders.js, for gameplay (what's under water, spray, sound)
 const WAVE_T = 7;
-function swash(t) {
-	const s = (t / WAVE_T) % 1;
-	return s < 0.3 ? Math.sin(s / 0.3 * Math.PI / 2) : Math.cos((s - 0.3) / 0.7 * Math.PI / 2);
+function waveAmp(i) { return (0.7 + 0.55 * hash12(i, 3.7)) * (0.82 + 0.25 * Math.sin(i * 0.83)); }
+function crestOff(i, x) { return (vnoise(x * 0.06, i * 1.7) - 0.5) * 2.4 + (vnoise(x * 0.19, i * 1.7 + 5) - 0.5) * 0.9; }
+function crestD(tau) { return 46 * Math.pow(Math.max(1 - tau / 3, 0), 1.15) - 2; }
+// run-up of wave i at s metres inland: sheet thickness, and seconds since that spot drained (99 = not reached)
+function runup(i, tau, x, s) {
+	const off = crestOff(i, x);
+	const u0 = Math.pow(clamp((2 - off) / 46, 0.001, 1), 1 / 1.15);
+	const ts = (tau - 3 * (1 - u0)) * WAVE_T;
+	if (ts <= 0) return { sheet: 0, since: 99 };
+	const A = waveAmp(i);
+	const v0 = 46 * 1.15 / 3 * Math.pow(u0, 0.15) / WAVE_T * Math.sqrt(A) * (0.75 + 0.5 * vnoise(x * 0.16, i * 1.7 + 7));
+	const g = 0.42 * (0.85 + 0.3 * vnoise(x * 0.33, i * 1.7 + 3));
+	const lobe = 1 + 0.16 * (vnoise(x * 1.1, i * 1.7 + 9) - 0.5) + 0.07 * (vnoise(x * 4, i * 1.7) - 0.5);
+	const sl = s / lobe, tmax = v0 / g, smax = v0 * v0 / (2 * g);
+	const sf = Math.max(v0 * ts - 0.5 * g * ts * ts, 0);
+	let since = 99;
+	if (sl < smax) {
+		const r = Math.sqrt(Math.max(v0 * v0 - 2 * g * Math.max(sl, 0), 0));
+		since = ts < (v0 - r) / g ? 99 : ts - (v0 + r) / g;
+	}
+	if (sl >= sf) return { sheet: 0, since };
+	const back = smooth(tmax * 0.7, tmax * 1.3, ts);
+	const u = Math.max(sl, 0) / Math.max(sf, 1e-3);
+	return { sheet: A * 0.08 * Math.exp(-ts * 0.2) * Math.sqrt(1 - u) * (1 - 0.65 * back) + 0.0025, since };
+}
+// is this spot under water right now, and was it wet recently?
+function waterAt(x, z, t) {
+	const s = z - U.uWaveShore.value;
+	let sheet = 0, wet = 0;
+	const ph = t / WAVE_T;
+	for (let k = 0; k < 6; k++) {
+		const i = Math.floor(ph) - k;
+		const r = runup(i, ph - i, x, s);
+		if (k < 4) sheet = Math.max(sheet, r.sheet);
+		if (r.since < 98) wet = Math.max(wet, Math.exp(-Math.max(r.since, 0) / 45));
+	}
+	return { covered: sheet > 0 || groundY(x, z) < waterNow, sheet, wet };
 }
 function waveAt(x, t, k) {
 	const ph = t / WAVE_T;
 	const i = Math.floor(ph) - k;
-	const a = (ph - i) / 3;
-	const seed = i * 1.7;
-	const D = 44 * Math.pow(1 - a, 1.25);
-	return {
-		D,
-		crest: D + 0.9 * Math.sin(x * 0.09 + seed) + 0.5 * Math.sin(x * 0.23 - seed * 0.6),
-		dBreak: 7.5 + 2.0 * Math.sin(x * 0.05 + seed * 2.3) + 0.9 * Math.sin(x * 0.13 + seed),
-		H: (0.08 + 0.42 * Math.pow(smooth(44, 7.5, D), 2)) * (0.85 + 0.25 * Math.sin(x * 0.07 + seed))
-	};
+	const A = waveAmp(i);
+	const crest = crestD(ph - i) + crestOff(i, x);
+	const dBreak = 4.2 + 3.4 * A + (vnoise(x * 0.045, i * 1.7 + 11) - 0.5) * 4.5;
+	const grow = smooth(44, dBreak, crest);
+	return { D: crest, crest, dBreak, H: A * (0.06 + 0.36 * grow * grow) };
 }
-let waterNow = 0, waterHigh = 0.13, tideZ = 0, lastBreakD = 99;
+let waterNow = 0, waterHigh = 0.03, tideZ = 0, lastBreakD = 99;
 const TIDE_IN = 3200, TIDE_HOLD = 900, TIDE_OUT = 3600, TIDE_FULL = 0.78;
 function updateWater(t, now, dt) {
 	tideZ = tideOffset(now);
-	const sw = swash(t);
-	waterNow = tideZ - 0.04 + 0.17 * sw;
-	waterHigh = Math.max(tideZ + 0.13, waterNow + 0.01, waterHigh - dt * 0.004);
+	waterNow = tideZ;
+	waterHigh = Math.max(tideZ + 0.03, waterHigh - dt * 0.004);
 	U.uWl.value = waterNow;
 	U.uWlHigh.value = waterHigh;
 	U.uWaveShore.value = SHORE_Z + tideZ / LAND_SLOPE;
@@ -945,7 +976,7 @@ const CARRY = [0, -0.6, 0.35, "surf", 0.5, 40];
 const SHOW = [0, -0.3, 0.12, "surf", 0.62, 14]; // tipped toward you so you can see what's in it
 
 function digProblem(x, z) {
-	if (groundY(x, z) < waterNow + 0.01) return "That's under water right now. Wait for the wave to go back out.";
+	if (waterAt(x, z, U.uTime.value).covered) return "That's under water right now. Wait for the wave to go back out.";
 	const h = holeAt(x, z);
 	if (h && h.depth >= MAX_HOLE) return "That's as deep as the scoop reaches.";
 	return null;
@@ -1219,7 +1250,7 @@ function updateRunners(dt) {
 		r.sink += sinkRate * dt;
 		const emerge = Math.min(1, r.t / 0.35);
 		const gy = groundY(r.x, r.z);
-		const under = waterNow - gy;
+		const under = waterAt(r.x, r.z, U.uTime.value).covered ? 0.03 : 0;
 		if (under > 0.02) r.sink += dt * 0.06;
 		r.obj.position.set(r.x, gy - (1 - emerge) * r.holeD * 0.6 - r.sink, r.z);
 		const face = r.obj.userData.facing || 0;
@@ -1304,7 +1335,7 @@ function updatePlayer(dt, t) {
 		const hx = player.vx, hz = player.vz, hl = Math.hypot(hx, hz) || 1;
 		const ang = Math.atan2(hx / hl, -hz / hl);
 		const fx = player.x - hz / hl * player.foot * 0.1, fz = player.z + hx / hl * player.foot * 0.1;
-		const wet = groundY(fx, fz) < waterHigh + 0.03;
+		const wet = groundY(fx, fz) < waterHigh + 0.03 || waterAt(fx, fz, U.uTime.value).wet > 0.3;
 		const pr = { type: player.foot > 0 ? 2 : 1, x: fx, z: fz, r: 1, d: wet ? 0.008 : 0.014, ang: -ang };
 		stamps.push(pr);
 		if (stamps.length > 900) {
