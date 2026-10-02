@@ -118,10 +118,10 @@ float vorEdge(vec2 x, float t) {
 
 // the bright net of light that ripples throw on the sea floor
 float caustics(vec2 p, float t) {
-	vec2 q = p * 4.5;
+	vec2 q = p * 6.0;
 	q += vec2(vnoise(q * 0.7 + t * 0.35), vnoise(q * 0.7 + 5.2 - t * 0.3)) * 1.2;
 	float a = vorEdge(q, t * 0.9);
-	vec2 q2 = p * 6.2 + 3.1;
+	vec2 q2 = p * 8.4 + 3.1;
 	q2 += vec2(vnoise(q2 * 0.6 - t * 0.3), vnoise(q2 * 0.6 + 2.7 + t * 0.4)) * 1.2;
 	float b = vorEdge(q2, t * 1.1);
 	float la = exp(-a * a * 90.0), lb = exp(-b * b * 120.0);
@@ -318,16 +318,14 @@ void main() {
 	}
 	sandH(p, pit);
 	float inland = p.y - uShoreZ;
-	vec3 alb = mix(vec3(0.66, 0.51, 0.32), vec3(0.55, 0.41, 0.25), smoothstep(0.3, 0.75, fbm(p * 1.2)));
+	vec3 alb = mix(vec3(0.66, 0.51, 0.32), vec3(0.59, 0.45, 0.28), smoothstep(0.3, 0.75, fbm(p * 1.2)));
 	alb = mix(alb, vec3(0.72, 0.64, 0.50), smoothstep(0.55, 0.8, fbm(p * 3.0 + 3.0)) * 0.45);
 	// dark mineral streaks the backwash sorted out
 	alb = mix(alb, vec3(0.26, 0.22, 0.19), smoothstep(0.62, 0.8, fbm(vec2(p.x * 0.6, p.y * 4.0) + 11.0)) * (1.0 - smoothstep(2.5, 4.5, inland)) * 0.55);
 	float g = hash12(gl_FragCoord.xy);
 	float g2 = hash12(gl_FragCoord.xy + 71.3);
 	alb *= 0.9 + 0.2 * g;
-	if (g2 > 0.994) alb *= 0.5;
-	else if (g2 > 0.988) alb = mix(alb, vec3(0.62, 0.32, 0.22), 0.5);
-	else if (g2 < 0.004) alb = vec3(0.92, 0.90, 0.86);
+	alb *= 0.97 + 0.06 * g2;
 	// wrack line: dried seaweed where the last high tide reached
 	float wy = 4.6 + (fbm(vec2(p.x * 0.4, 1.3)) - 0.5) * 1.6;
 	float band = exp(-pow((inland - wy) / 0.3, 2.0));
@@ -388,8 +386,20 @@ sAlb = mix(sProc, sAlb, sIn);
 float sPit = sH.g * sIn;
 float sVis = mix(1.0, sH.b, sIn);
 float sDist = length(vWPos - cameraPosition);
-float sg = hash12(floor(sp * 420.0));
-sAlb *= 1.0 + (sg - 0.5) * 0.35 * exp(-sDist / 2.5);
+// individual grains, drawn per pixel so they stay sharp up close and fade before they shimmer
+{
+	float fw = max(length(fwidth(sp)), 1e-6);
+	float fine = smoothstep(1.2, 2.5, (1.0 / 1100.0) / fw);
+	float coarse = smoothstep(1.2, 2.5, (1.0 / 380.0) / fw);
+	float g1 = hash12(floor(sp * 1100.0));
+	vec3 grain = vec3(1.0 + (g1 - 0.5) * 0.45 * fine);
+	float g3 = hash12(floor(sp * 380.0) + 3.3);
+	vec3 odd = g3 > 0.982 ? vec3(0.38, 0.35, 0.33) : g3 > 0.968 ? vec3(1.18, 0.92, 0.80) : g3 < 0.014 ? vec3(1.32, 1.30, 1.24) : vec3(1.0);
+	grain *= mix(vec3(1.0), odd, coarse);
+	float gm = hash12(floor(sp * 140.0) + 9.1);
+	grain *= 1.0 + (gm - 0.5) * 0.12 * coarse;
+	sAlb *= grain;
+}
 float sEdge = (fbm3(vec2(sp.x * 0.8, uTime * 0.22)) - 0.5) * 0.015;
 float sAbove = vWPos.y - (uWl + sEdge);
 float sWet = 1.0 - smoothstep(0.0, 0.03, vWPos.y - (uWlHigh + sEdge));
@@ -399,8 +409,9 @@ diffuseColor.rgb = sAlb;
 `;
 
 export const SAND_FRAG_ROUGH = /* glsl */ `
-float roughnessFactor = mix(0.95, 0.5, sWet);
-roughnessFactor = mix(roughnessFactor, 0.16, sFilm);
+// dry sand is matte; sand the swash just left is glassy, then dulls as it drains
+float roughnessFactor = mix(0.97, 0.42, sWet);
+roughnessFactor = mix(roughnessFactor, 0.07, max(sFilm, sWet * smoothstep(0.03, 0.0, vWPos.y - uWlHigh) * 0.85));
 `;
 
 export const SAND_FRAG_NORMAL = /* glsl */ `
@@ -437,7 +448,7 @@ export const SAND_FRAG_LIGHTS_END = /* glsl */ `
 reflectedLight.directDiffuse *= sVis;
 reflectedLight.directSpecular *= sVis * mix(1.0, 0.45, sWet * (1.0 - sFilm));
 reflectedLight.indirectDiffuse *= 1.0 - 0.3 * sPit;
-reflectedLight.indirectSpecular *= 1.0 - 0.6 * sPit;
+reflectedLight.indirectSpecular *= (1.0 - 0.6 * sPit) * mix(0.35, 1.0, sWet);
 // sunlight bouncing off the lit walls into the shadowed ones
 reflectedLight.directDiffuse += sAlb * 0.3 * sPit;
 `;
@@ -567,16 +578,28 @@ void main() {
 	vec2 fp = mat2(0.8, -0.6, 0.6, 0.8) * vQ;
 	float fn = fbm(fp * vec2(3.0, 5.0) + vec2(t * 0.1, t * 0.3)) * 0.7 + fbm3(fp * 13.0 - vec2(0.0, t * 0.4)) * 0.3;
 	// lacy network of bubbles that thickens into solid whitewater
-	vec2 lq = vQ * vec2(6.0, 7.5) + vec2(0.0, t * 0.4);
-	lq += vec2(vnoise(lq * 0.6 + t * 0.1), vnoise(lq * 0.6 + 3.0)) * 1.3;
-	float le = vorEdge(lq, t * 0.25);
+	vec2 lq = vQ * vec2(7.0, 9.5) + vec2(0.0, t * 0.5);
+	lq += vec2(fbm3(lq * 0.45 + t * 0.04), fbm3(lq * 0.45 + 4.0 - t * 0.03)) * 2.2;
+	float le = vorEdge(lq, t * 0.2);
+	float le2 = vorEdge(lq * 2.4 + 5.0, t * 0.3);
 	float shore = 1.0 - smoothstep(0.0, 0.05, vEdge);
 	float fa = clamp(max(foam * 1.3, shore * 0.8), 0.0, 1.0);
-	float lace = (1.0 - smoothstep(0.0, 0.04 + 0.45 * fa * fa, le)) * smoothstep(0.25, 0.55, vnoise(lq * 0.35 + 9.0) + fa * 0.4);
+	float lw = 0.015 + 0.3 * fa * fa;
+	float lines = max(1.0 - smoothstep(0.0, lw, le), (1.0 - smoothstep(0.0, lw * 0.7, le2)) * 0.55);
+	// broken up: patches of net, thin streaks, and bare water in between
+	float mask = smoothstep(0.38, 0.62, fbm3(vQ * vec2(1.1, 1.6) + vec2(0.0, t * 0.08)) + fa * 0.45);
+	float bub = step(0.955, hash12(floor(vQ * 140.0 + vec2(0.0, t * 3.0)))) * smoothstep(0.3, 0.7, fbm3(vQ * 2.5));
+	float lace = max(lines * mask, bub * 0.7) * (0.65 + 0.35 * vnoise(vQ * 9.0));
 	float white = fa * mix(lace, 1.0, smoothstep(0.75, 1.0, fa * (0.7 + 0.5 * fn)));
+	// whitewater isn't a solid sheet: it tears into clumps and streaks
+	white *= mix(1.0, smoothstep(0.28, 0.62, fn + 0.25 * vnoise(fp * vec2(2.0, 9.0))), smoothstep(0.2, 0.8, foam));
 	white *= 0.7 + 0.3 * smoothstep(0.3, 0.7, fn);
 	float fm = clamp(white, 0.0, 1.0) * mix(lod, 1.0, 0.7);
-	vec3 foamCol = vec3(0.90, 0.93, 0.94) * (0.62 + 0.85 * max(dot(n, uSunDir), 0.0));
+	// churned whitewater has lumps that catch the sun and shade themselves
+	float fh0 = fbm3(fp * 7.0 - vec2(0.0, t * 0.5));
+	vec2 fg = vec2(fbm3(fp * 7.0 + vec2(0.05, 0.0) - vec2(0.0, t * 0.5)) - fh0, fbm3(fp * 7.0 + vec2(0.0, 0.05) - vec2(0.0, t * 0.5)) - fh0) * 6.0 * lod;
+	vec3 fnrm = normalize(n + vec3(-fg.x, 0.0, -fg.y));
+	vec3 foamCol = vec3(0.90, 0.93, 0.94) * (0.5 + 0.95 * max(dot(fnrm, uSunDir), 0.0)) * (0.85 + 0.25 * fh0);
 	col = mix(col, foamCol, fm * 0.95);
 
 	col = mix(col, uFogColor, 1.0 - exp(-dist * uFogDensity));

@@ -274,6 +274,110 @@ export function makeDetector() {
 	return root;
 }
 
+// ---------- the sand scoop ----------
+// A long-handled beach scoop: a perforated stainless basket you stab into the sand,
+// lever up and shake, so the sand falls through and whatever was in it stays.
+// Local frame: basket floor centred on the origin, mouth toward -z, handle rising back toward +z.
+export const SCOOP_HANDLE_ANGLE = 35 * PI / 180;
+const PERF_TEX = canvasTex(64, 64, (c, w, h) => {
+	c.fillStyle = "#fff";
+	c.fillRect(0, 0, w, h);
+	c.fillStyle = "#000";
+	// staggered 7 mm holes on an 11 mm pitch: two rows per tile
+	for (const [x, y] of [[16, 16], [48, 16], [0, 48], [32, 48], [64, 48]]) {
+		c.beginPath();
+		c.arc(x, y, 10.5, 0, PI * 2);
+		c.fill();
+	}
+}, false);
+PERF_TEX.wrapS = PERF_TEX.wrapT = THREE.RepeatWrapping;
+function planarQuads(quads, scale) {
+	// quads: arrays of four [x, y, z] corners; uv from the two widest axes, in metres * scale
+	const pos = [], uv = [], idx = [];
+	for (const q of quads) {
+		const a = new THREE.Vector3(...q[0]), b = new THREE.Vector3(...q[1]), d = new THREE.Vector3(...q[3]);
+		const n = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(d, a));
+		const ax = Math.abs(n.x) > Math.abs(n.y) && Math.abs(n.x) > Math.abs(n.z) ? 0 : Math.abs(n.y) > Math.abs(n.z) ? 1 : 2;
+		const base = pos.length / 3;
+		for (const c of q) {
+			pos.push(c[0], c[1], c[2]);
+			const u = ax === 0 ? c[2] : c[0], v = ax === 1 ? c[2] : c[1];
+			uv.push(u * scale, v * scale);
+		}
+		idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+	}
+	const g = new THREE.BufferGeometry();
+	g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+	g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+	g.setIndex(idx);
+	g.computeVertexNormals();
+	return g;
+}
+export function makeScoop() {
+	const root = new THREE.Group();
+	const W = 0.12, ZF = -0.13, ZB = 0.11, HB = 0.12, HF = 0.035;
+	const perf = std({ color: lin(0.62, 0.63, 0.64), metalness: 1, roughness: 0.34, alphaMap: PERF_TEX, alphaTest: 0.5, side: THREE.DoubleSide });
+	const basket = planarQuads([
+		[[-W, 0, ZF], [W, 0, ZF], [W, 0, ZB], [-W, 0, ZB]],
+		[[-W, 0, ZB], [W, 0, ZB], [W, HB, ZB], [-W, HB, ZB]],
+		[[-W, 0, ZF], [-W, 0, ZB], [-W, HB, ZB], [-W, HF, ZF]],
+		[[W, 0, ZB], [W, 0, ZF], [W, HF, ZF], [W, HB, ZB]]
+	], 1 / 0.022);
+	mesh(basket, perf, root);
+	const solid = std({ color: lin(0.66, 0.67, 0.68), metalness: 1, roughness: 0.28, side: THREE.DoubleSide });
+	// a solid sharpened lip at the mouth, angled down so it bites into the sand
+	const lip = planarQuads([[[-W - 0.003, -0.012, ZF - 0.035], [W + 0.003, -0.012, ZF - 0.035], [W + 0.003, 0.0, ZF + 0.004], [-W - 0.003, 0.0, ZF + 0.004]]], 1);
+	mesh(lip, solid, root);
+	// folded edges: rim along the top of the walls and seams down the corners
+	const rimPts = [[-W, HF, ZF], [-W, HB, ZB], [W, HB, ZB], [W, HF, ZF]].map((v) => new THREE.Vector3(...v));
+	const rimCurve = new THREE.CurvePath();
+	for (let i = 0; i < 3; i++) rimCurve.add(new THREE.LineCurve3(rimPts[i], rimPts[i + 1]));
+	mesh(new THREE.TubeGeometry(rimCurve, 48, 0.0045, 8, false), solid, root);
+	for (const [a, b] of [[[-W, 0, ZF], [-W, 0, ZB]], [[W, 0, ZF], [W, 0, ZB]], [[-W, 0, ZB], [W, 0, ZB]], [[-W, 0, ZB], [-W, HB, ZB]], [[W, 0, ZB], [W, HB, ZB]], [[-W, 0, ZF], [W, 0, ZF]]]) {
+		mesh(new THREE.TubeGeometry(new THREE.LineCurve3(new THREE.Vector3(...a), new THREE.Vector3(...b)), 2, 0.003, 6, false), solid, root);
+	}
+	// handle: socket, aluminium pole, foam grip, end cap
+	const dir = new THREE.Vector3(0, Math.sin(SCOOP_HANDLE_ANGLE), Math.cos(SCOOP_HANDLE_ANGLE));
+	const pole = new THREE.Group();
+	pole.position.set(0, HB * 0.8, ZB + 0.01);
+	pole.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+	root.add(pole);
+	const L = 1.2;
+	const poleG = cyl(0.0135, 0.0135, L, 18);
+	poleG.translate(0, L / 2, 0);
+	mesh(poleG, MAT.alu, pole);
+	const sock = mesh(cyl(0.019, 0.017, 0.09, 18), solid, pole);
+	sock.position.y = 0.03;
+	const gripG = cyl(0.021, 0.021, 0.3, 18);
+	gripG.translate(0, L - 0.17, 0);
+	mesh(gripG, std({ color: 0x151517, roughness: 0.9 }), pole);
+	const cap = mesh(new THREE.SphereGeometry(0.022, 16, 8, 0, PI * 2, 0, PI / 2), MAT.rubber, pole);
+	cap.position.y = L - 0.02;
+	// two braces from the pole down to the top corners of the walls
+	const brStart = new THREE.Vector3(0, HB * 0.8, ZB + 0.01).addScaledVector(dir, 0.16);
+	for (const sx of [-1, 1]) {
+		const end = new THREE.Vector3(sx * W, HB, ZB - 0.02);
+		mesh(new THREE.TubeGeometry(new THREE.LineCurve3(brStart, end), 2, 0.0045, 8, false), solid, root);
+	}
+	// the load of wet sand, and a place for whatever's left after sifting
+	const loadG = displace(lump(1, 3, 0.35, 2.6, 4), (v) => { if (v.y < 0) v.y *= 0.06; });
+	const load = mesh(loadG, std({ color: lin(0.36, 0.27, 0.17), roughness: 0.95 }), root);
+	load.castShadow = false;
+	const slot = new THREE.Group();
+	slot.position.set(0, 0.004, -0.005);
+	root.add(slot);
+	root.userData.slot = slot;
+	root.userData.setLoad = (f) => {
+		load.visible = f > 0.02;
+		const k = Math.pow(Math.max(f, 0.02), 0.6);
+		load.scale.set(0.11 * k, 0.085 * f + 0.004, 0.12 * k);
+		load.position.set(0, 0.004, -0.005);
+	};
+	root.userData.setLoad(0);
+	root.userData.size = { W, ZF, ZB };
+	return root;
+}
+
 // ---------- coins and their faces ----------
 function coinTex(draw) {
 	return canvasTex(256, 256, (c, w, h) => {
@@ -1340,20 +1444,30 @@ export function driftwood(s) {
 		v.x += Math.sin(v.y * 2.4 + s) * 0.04;
 	});
 	g.rotateZ(PI / 2);
-	const bark = canvasTex(256, 64, (c, w, h) => {
-		c.fillStyle = "#9c9286";
+	// sun-bleached wood: grain running along the length (v), split here and there
+	const bark = canvasTex(128, 256, (c, w, h) => {
+		c.fillStyle = "#a39a8e";
 		c.fillRect(0, 0, w, h);
-		for (let i = 0; i < 140; i++) {
-			c.strokeStyle = rnd() < 0.5 ? "rgba(90,82,72,0.5)" : "rgba(200,192,180,0.4)";
-			c.lineWidth = rr(0.5, 2);
-			const y = rnd() * h;
+		for (let i = 0; i < 160; i++) {
+			c.strokeStyle = rnd() < 0.5 ? "rgba(110,100,88,0.28)" : "rgba(196,188,176,0.25)";
+			c.lineWidth = rr(0.5, 1.6);
+			const x = rnd() * w;
 			c.beginPath();
-			c.moveTo(0, y);
-			c.bezierCurveTo(w * 0.3, y + rr(-6, 6), w * 0.6, y + rr(-6, 6), w, y + rr(-4, 4));
+			c.moveTo(x, 0);
+			c.bezierCurveTo(x + rr(-5, 5), h * 0.3, x + rr(-5, 5), h * 0.6, x + rr(-4, 4), h);
+			c.stroke();
+		}
+		for (let i = 0; i < 6; i++) {
+			c.strokeStyle = "rgba(60,52,44,0.55)";
+			c.lineWidth = rr(1, 2);
+			const x = rnd() * w, y = rnd() * h;
+			c.beginPath();
+			c.moveTo(x, y);
+			c.lineTo(x + rr(-2, 2), y + rr(20, 70));
 			c.stroke();
 		}
 	});
-	const m = new THREE.Mesh(g, std({ map: bark, roughness: 0.95 }));
+	const m = new THREE.Mesh(g, std({ map: bark, color: lin(0.86, 0.74, 0.6), roughness: 1, envMapIntensity: 0.45 }));
 	m.castShadow = true;
 	m.receiveShadow = true;
 	return m;

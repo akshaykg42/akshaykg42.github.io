@@ -4,54 +4,55 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import * as S from "./shaders.js";
-import { makeDetector, ITEM_BUILDERS, CRITTER_BUILDERS, pebbleGeo, scallopGeo, seaweedClump, driftwood, makeGull, makeBoat } from "./models.js";
+import { makeDetector, makeScoop, SCOOP_HANDLE_ANGLE, ITEM_BUILDERS, CRITTER_BUILDERS, pebbleGeo, scallopGeo, seaweedClump, driftwood, makeGull, makeBoat } from "./models.js";
 
 // ---------- what's down there ----------
-// metal: vdi is the detector's 0-99 target ID (iron low, silver and coins high)
+// metal: vdi is the conductivity reading a real detector shows (0-99).
+// Iron reads low; foil, pull tabs and gold share the middle; copper and silver read high.
 const METAL = [
-	{ id: "bolt",     name: "Rusty bolt",       vdi: 6,  value: 0,       tier: "common",    text: "Fell off something important. Probably the pier." },
-	{ id: "hook",     name: "Fishhook",         vdi: 9,  value: 0.1,     tier: "common",    text: "Whatever was on the other end got away. Respect." },
-	{ id: "anchor",   name: "Tiny anchor",      vdi: 12, value: 3,       tier: "uncommon",  text: "Somewhere out there, a very small boat is drifting away." },
-	{ id: "skeleton", name: "Skeleton key",     vdi: 24, value: 15,      tier: "uncommon",  text: "Opens one specific door, in 1887." },
-	{ id: "keys",     name: "Car keys",         vdi: 28, value: 0,       tier: "common",    text: "In the parking lot, a Honda waits forever." },
-	{ id: "battery",  name: "AA battery",       vdi: 32, value: 0,       tier: "common",    text: "Still 37% charged. That's more than your phone." },
-	{ id: "tab",      name: "Pull tab",         vdi: 36, value: 0,       tier: "common",    text: "Detectorists dig about a thousand of these for every ring. Today is one of those days." },
-	{ id: "phone",    name: "Someone's phone",  vdi: 39, value: 0,       tier: "uncommon",  text: "47 missed calls from Mom." },
-	{ id: "cap",      name: "Bottle cap",       vdi: 42, value: 0,       tier: "common",    text: "Under the cap it says “Sorry, try again.” Fair." },
-	{ id: "can",      name: "Soda can",         vdi: 45, value: 0.05,    tier: "common",    text: "Flavor: discontinued. Deposit: 5¢." },
-	{ id: "trophy",   name: "Trophy",           vdi: 50, value: 1,       tier: "uncommon",  text: "Sandcastle Contest 2009, 3rd place (out of 3)." },
-	{ id: "watch",    name: "Wristwatch",       vdi: 54, value: 35,      tier: "uncommon",  text: "Still ticking. Four hours slow, or twenty hours early." },
-	{ id: "ring",     name: "Wedding ring",     vdi: 58, value: 400,     tier: "rare",      text: "Engraved inside: “S + M, forever-ish.”" },
-	{ id: "compass",  name: "Brass compass",    vdi: 64, value: 20,      tier: "uncommon",  text: "Points firmly at the snack bar, no matter what." },
-	{ id: "spoon",    name: "Silver spoon",     vdi: 74, value: 8,       tier: "common",    text: "Someone was born with this in their mouth, then dropped it." },
-	{ id: "quarter",  name: "Quarter",          vdi: 83, value: 0.25,    tier: "common",    text: "1979. George looks tired." },
-	{ id: "dollar",   name: "Silver dollar",    vdi: 88, value: 60,      tier: "rare",      text: "1921. Heavy, cold, and somehow still smug about it." },
-	{ id: "doubloon", name: "Pirate doubloons", vdi: 95, value: 12000,   tier: "rare",      text: "Arr. (That's the entire note they left.)" },
-	{ id: "crown",    name: "Crown",            vdi: 97, value: 50000,   tier: "legendary", text: "Property of the King of This Specific Beach. Long may he tan." },
-	{ id: "ufo",      name: "Flying saucer",    vdi: 99, value: 1000000, tier: "legendary", text: "Oh. So that's where it went." }
+	{ id: "bolt",     name: "Rusty bolt",       vdi: 6,  value: 0,       tier: "common",    text: "A steel bolt, mostly rust now. Probably off the pier or a boat trailer." },
+	{ id: "hook",     name: "Fishhook",         vdi: 9,  value: 0.1,     tier: "common",    text: "A steel J-hook, still sharp. Fishing gear turns up all along the waterline." },
+	{ id: "anchor",   name: "Grapnel anchor",   vdi: 12, value: 3,       tier: "uncommon",  text: "A small folding anchor for a kayak or dinghy." },
+	{ id: "skeleton", name: "Skeleton key",     vdi: 18, value: 15,      tier: "uncommon",  text: "An old iron key. Locks like the one it opened went out of use about a century ago." },
+	{ id: "keys",     name: "Car keys",         vdi: 28, value: 0,       tier: "common",    text: "A car key and a house key on a ring." },
+	{ id: "battery",  name: "AA battery",       vdi: 32, value: 0,       tier: "common",    text: "A corroded AA battery." },
+	{ id: "tab",      name: "Pull tab",         vdi: 44, value: 0,       tier: "common",    text: "The ring-pull from a drink can. It reads almost exactly like a small gold ring, so detectorists dig hundreds of them." },
+	{ id: "phone",    name: "Phone",            vdi: 39, value: 0,       tier: "uncommon",  text: "A phone, dead and packed with sand." },
+	{ id: "cap",      name: "Bottle cap",       vdi: 25, value: 0,       tier: "common",    text: "A crimped steel bottle cap." },
+	{ id: "can",      name: "Drink can",        vdi: 48, value: 0.05,    tier: "common",    text: "An aluminium can, crushed flat." },
+	{ id: "trophy",   name: "Trophy",           vdi: 50, value: 1,       tier: "uncommon",  text: "A small plated trophy. The engraving has worn off." },
+	{ id: "watch",    name: "Wristwatch",       vdi: 54, value: 35,      tier: "uncommon",  text: "A stainless steel watch. The glass is scratched but it still runs." },
+	{ id: "ring",     name: "Gold ring",        vdi: 58, value: 400,     tier: "rare",      text: "A gold wedding band. Gold rings are what most beach detectorists are hoping for." },
+	{ id: "compass",  name: "Brass compass",    vdi: 70, value: 20,      tier: "uncommon",  text: "A brass pocket compass. The needle still swings." },
+	{ id: "spoon",    name: "Silver spoon",     vdi: 82, value: 8,       tier: "common",    text: "A sterling silver teaspoon." },
+	{ id: "quarter",  name: "Quarter",          vdi: 85, value: 0.25,    tier: "common",    text: "A 1979 US quarter." },
+	{ id: "dollar",   name: "Silver dollar",    vdi: 92, value: 60,      tier: "rare",      text: "A 1921 Morgan silver dollar." },
+	{ id: "doubloon", name: "Gold coins",       vdi: 62, value: 12000,   tier: "rare",      text: "Spanish gold escudos. Storms sometimes uncover coins from old wrecks along this kind of coast." },
+	{ id: "crown",    name: "Gold crown",       vdi: 66, value: 50000,   tier: "legendary", text: "A gold crown set with stones. Nobody knows how it got here." },
+	{ id: "ufo",      name: "Metal disc",       vdi: 99, value: 1000000, tier: "legendary", text: "A small, very heavy disc made of no metal anyone can name. It's warm and it hums." }
 ];
-// not metal: the detector can't hear these, you just dig into them
+// not metal: the detector stays quiet, you only find these by digging
 const OTHER = [
-	{ id: "flipflop",   name: "Left flip-flop",      value: 0,   tier: "common",   text: "The right one is on a different beach, living its best life." },
-	{ id: "scallop",    name: "Scallop shell",       value: 1,   tier: "common",   text: "Perfect, not a chip on it. Somebody's going on the windowsill." },
-	{ id: "moonsnail",  name: "Moon snail shell",    value: 2,   tier: "common",   text: "Hold it to your ear. Hear that? It's this website." },
-	{ id: "seaglass",   name: "Sea glass",           value: 3,   tier: "common",   text: "Used to be a bottle. Spent forty years in the surf becoming a gem." },
-	{ id: "rock",       name: "Rock shaped like Ohio", value: 0, tier: "common",   text: "Uncanny. Cleveland is a little dent." },
-	{ id: "sanddollar", name: "Sand dollar",         value: 0,   tier: "uncommon", text: "Not legal tender. We checked." },
-	{ id: "shovel",     name: "Toy shovel",          value: 1,   tier: "common",   text: "Abandoned mid-sandcastle. The castle didn't make it either." },
-	{ id: "shades",     name: "Sunglasses",          value: 10,  tier: "common",   text: "Still cooler than you." },
-	{ id: "duck",       name: "Rubber duck",         value: 2,   tier: "uncommon", text: "Fell off a cargo ship in 1992. Has seen things." },
-	{ id: "tooth",      name: "Shark tooth",         value: 15,  tier: "uncommon", text: "Its owner has more. Hundreds more." },
-	{ id: "bottle",     name: "Message in a bottle", value: 0,   tier: "rare",     text: "It says: “If you're reading this, I'm out of town. Please water my plants.”" },
-	{ id: "oyster",     name: "Oyster",              value: 300, tier: "rare",     text: "There's a pearl inside. It's a bit lumpy. Still counts." }
+	{ id: "flipflop",   name: "Flip-flop",           value: 0,   tier: "common",   text: "A left flip-flop." },
+	{ id: "scallop",    name: "Scallop shell",       value: 1,   tier: "common",   text: "An unbroken scallop shell." },
+	{ id: "moonsnail",  name: "Moon snail shell",    value: 2,   tier: "common",   text: "Moon snails hunt clams under the sand by drilling through their shells." },
+	{ id: "seaglass",   name: "Sea glass",           value: 3,   tier: "common",   text: "A piece of bottle glass, frosted by years in the surf." },
+	{ id: "rock",       name: "Beach stone",         value: 0,   tier: "common",   text: "A stone worn smooth by the waves." },
+	{ id: "sanddollar", name: "Sand dollar",         value: 0,   tier: "uncommon", text: "The skeleton of a sand dollar, bleached by the sun." },
+	{ id: "shovel",     name: "Toy spade",           value: 1,   tier: "common",   text: "A plastic toy spade." },
+	{ id: "shades",     name: "Sunglasses",          value: 10,  tier: "common",   text: "A pair of sunglasses with one scratched lens." },
+	{ id: "duck",       name: "Rubber duck",         value: 2,   tier: "uncommon", text: "A rubber duck, faded almost white." },
+	{ id: "tooth",      name: "Shark tooth",         value: 15,  tier: "uncommon", text: "A fossil shark tooth, turned black by minerals in the sediment." },
+	{ id: "bottle",     name: "Message in a bottle", value: 0,   tier: "rare",     text: "A corked bottle with a rolled-up note inside. The ink has run and it's unreadable." },
+	{ id: "oyster",     name: "Oyster",              value: 300, tier: "rare",     text: "An oyster with a small pearl inside." }
 ];
-// critters: hiding just under the surface, gone the moment you find them
+// critters: they don't stay found
 const CRITTERS = [
-	{ id: "crab",     name: "Ghost crab",      tier: "critter", weight: 10, move: "scuttle", speed: 1.0,  text: "Not metal. Extremely upset.", toast: "A ghost crab! It is not metal. It is furious." },
-	{ id: "sandcrab", name: "Mole crab",       tier: "critter", weight: 8,  move: "dig",     speed: 0,    text: "Dug back down faster than you dug it up.", toast: "A mole crab. It's already digging itself back in." },
-	{ id: "worm",     name: "Lugworm",         tier: "critter", weight: 7,  move: "dig",     speed: 0,    text: "Was already halfway back down by the time you noticed.", toast: "A lugworm. It's already burrowing back down." },
-	{ id: "hermit",   name: "Hermit crab",     tier: "critter", weight: 6,  move: "scuttle", speed: 0.35, text: "Looked like a shell. Then it stood up.", toast: "That shell just got up and left." },
-	{ id: "turtle",   name: "Baby sea turtle", tier: "critter", weight: 2,  move: "sea",     speed: 0.22, text: "Hatched, blinked at you, and made a run for the ocean.", toast: "A baby sea turtle! Go on, little guy, the ocean's that way." }
+	{ id: "crab",     name: "Ghost crab",      tier: "critter", weight: 10, move: "scuttle", speed: 1.0,  text: "Ghost crabs dig burrows above the waterline and come out at dusk.", toast: "A ghost crab ran out of the hole." },
+	{ id: "sandcrab", name: "Mole crab",       tier: "critter", weight: 8,  move: "dig",     speed: 0,    text: "Mole crabs ride the swash and dig back in, tail first, in a couple of seconds.", toast: "A mole crab. It dug straight back in." },
+	{ id: "worm",     name: "Lugworm",         tier: "critter", weight: 7,  move: "dig",     speed: 0,    text: "Lugworms live in U-shaped burrows. The coiled casts on the surface are theirs.", toast: "A lugworm. It burrowed back down." },
+	{ id: "hermit",   name: "Hermit crab",     tier: "critter", weight: 6,  move: "scuttle", speed: 0.35, text: "A hermit crab living in an old snail shell.", toast: "A hermit crab walked off with its shell." },
+	{ id: "turtle",   name: "Turtle hatchling", tier: "critter", weight: 2, move: "sea",     speed: 0.22, text: "Sea turtles bury their eggs in the dry sand. The hatchlings head straight for the water.", toast: "A turtle hatchling. It's heading for the water." }
 ];
 const GROUPS = [
 	{ label: "Metal", kinds: METAL },
@@ -62,26 +63,20 @@ const ALL = METAL.concat(OTHER, CRITTERS);
 const WEIGHT = { common: 10, uncommon: 5, rare: 2, legendary: 0.7 };
 const TIER_LABEL = { common: "Junk", uncommon: "Uncommon", rare: "Rare", legendary: "Legendary", critter: "Critter" };
 const DEPTHS = { common: [4, 16], uncommon: [8, 24], rare: [14, 30], legendary: [22, 34] }; // cm
-const N_METAL = 13, N_OTHER = 20, N_CRITTER = 12;
-const DIG_STEP = 8, MAX_HOLE = 40; // cm
-const EMPTY_LINES = [
-	"Just sand.",
-	"Sand. Some wetter sand.",
-	"You found: more beach.",
-	"Nothing. The detector looks embarrassed.",
-	"A hole! Very nice hole. Empty though.",
-	"Sand all the way down, so far."
-];
+const N_METAL = 46, N_OTHER = 70, N_CRITTER = 40;
+const DIG_STEP = 10, MAX_HOLE = 40; // cm
+const EMPTY_LINE = "Nothing in that scoop.";
 
 // ---------- the world ----------
 const SHORE_Z = -6.2;            // mean waterline
 const LAND_SLOPE = 0.045, SEA_SLOPE = 0.04;
-const SUN_DIR = new THREE.Vector3(-0.37, 0.5, -0.78).normalize();
-const REGION = { x0: -16, z0: -21, w: 32, h: 32 }; // where the sand is baked in detail
+const SUN_DIR = new THREE.Vector3(-0.62, 0.45, -0.64).normalize();
+const REGION = { x0: -16, z0: -21, w: 32, h: 32 }; // where the sand is baked in detail; it follows you along the beach
+const BEACH = { x0: -70, x1: 70 };
 const EYE = 1.62;
 const REACH_MIN = 1.45, REACH = 2.9;
-const WALK = { x0: -10, x1: 10, z0: SHORE_Z + 1.2, z1: 7 };
-const SPAWN = { x0: -11.5, x1: 11.5, z0: SHORE_Z + 3.4, z1: 5 };
+const WALK = { x0: -60, x1: 60, z0: SHORE_Z + 1.2, z1: 7 };
+const SPAWN = { x0: -61.5, x1: 61.5, z0: SHORE_Z + 3.4, z1: 5 };
 const DETECT_R = 1.0, REVEAL_METAL = 0.26, REVEAL_OTHER = 0.36;
 const ITEM_SCALE = 1.5, CRITTER_SCALE = 1.9;
 const params = new URLSearchParams(location.search);
@@ -305,6 +300,14 @@ function bakeAll() {
 		}
 	}
 }
+// keep the detailed patch centred on you as you walk the beach
+function followRegion(force) {
+	const cx = REGION.x0 + REGION.w / 2;
+	if (!force && Math.abs(player.x - cx) < 6) return;
+	REGION.x0 = Math.round(player.x) - REGION.w / 2;
+	bakeMat.uniforms.uRegion.value.set(REGION.x0, REGION.z0, REGION.w, REGION.h);
+	bakeAll();
+}
 function bakeAround(s) {
 	const m = stampReach(s) + 0.05;
 	bakeRect(s.x - m, s.z - m, s.x + m, s.z + m, true);
@@ -356,9 +359,9 @@ const sandMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9
 const sandUniforms = {
 	uHeightTex: { value: rtHgt.texture },
 	uAlbedoTex: { value: rtAlb.texture },
-	uRegion: { value: new THREE.Vector4(REGION.x0, REGION.z0, REGION.w, REGION.h) },
+	uRegion: bakeMat.uniforms.uRegion,
 	uTexel: { value: new THREE.Vector2(1 / BAKE, 1 / BAKE) },
-	uCausticCol: { value: new THREE.Color(1.0, 0.95, 0.82).multiplyScalar(1.4) }
+	uCausticCol: { value: new THREE.Color(1.0, 0.95, 0.82).multiplyScalar(0.75) }
 };
 sandMat.onBeforeCompile = (sh) => {
 	Object.assign(sh.uniforms, sandUniforms, U);
@@ -450,6 +453,7 @@ const decor = new THREE.Group();
 scene.add(decor);
 function scatterInstanced(geo, mat, n, place) {
 	const im = new THREE.InstancedMesh(geo, mat, n);
+	const pos = [];
 	im.castShadow = true;
 	im.receiveShadow = true;
 	const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3(), c = new THREE.Color(), e = new THREE.Euler();
@@ -459,19 +463,21 @@ function scatterInstanced(geo, mat, n, place) {
 		m.compose(p, q, s);
 		im.setMatrixAt(i, m);
 		im.setColorAt(i, c);
+		pos.push(p.x, p.z);
 	}
+	im.userData.pos = pos;
 	decor.add(im);
 	return im;
 }
 function decorSpot(p, zMin, zMax) {
-	p.x = rr(REGION.x0 + 1, REGION.x0 + REGION.w - 1);
+	p.x = rr(BEACH.x0, BEACH.x1);
 	p.z = rr(zMin, zMax);
 	p.y = smoothGroundY(p.x, p.z);
 }
 function buildDecor() {
 	decor.clear();
 	const pebbleTones = [[0.35, 0.32, 0.29], [0.22, 0.2, 0.18], [0.5, 0.47, 0.42], [0.42, 0.3, 0.22], [0.15, 0.15, 0.16]];
-	scatterInstanced(pebbleGeo(3), new THREE.MeshStandardMaterial({ roughness: 0.6 }), 260, (p, e, s, c) => {
+	scatterInstanced(pebbleGeo(3), new THREE.MeshStandardMaterial({ roughness: 0.6 }), 1100, (p, e, s, c) => {
 		decorSpot(p, SHORE_Z + 0.5, 9);
 		const k = rr(0.006, 0.022);
 		s.set(k, k, k);
@@ -481,7 +487,7 @@ function buildDecor() {
 		c.setRGB(t[0], t[1], t[2], THREE.LinearSRGBColorSpace);
 	});
 	const shellTones = [[0.62, 0.52, 0.42], [0.58, 0.38, 0.3], [0.66, 0.6, 0.52], [0.5, 0.42, 0.34], [0.7, 0.55, 0.45]];
-	scatterInstanced(scallopGeo(1, 14), new THREE.MeshStandardMaterial({ roughness: 0.55, side: THREE.DoubleSide }), 45, (p, e, s, c) => {
+	scatterInstanced(scallopGeo(1, 14), new THREE.MeshStandardMaterial({ roughness: 0.55, side: THREE.DoubleSide }), 190, (p, e, s, c) => {
 		decorSpot(p, SHORE_Z + 1.5, 9);
 		const k = rr(0.01, 0.024);
 		s.set(k, k, k);
@@ -493,9 +499,10 @@ function buildDecor() {
 	});
 	// seaweed along the wrack line
 	const weedMat = new THREE.MeshStandardMaterial({ color: new THREE.Color().setRGB(0.12, 0.085, 0.03, THREE.LinearSRGBColorSpace), roughness: 0.5 });
-	for (let i = 0; i < 26; i++) {
-		const m = new THREE.Mesh(seaweedClump(i + 1), weedMat);
-		const x = rr(REGION.x0 + 1, REGION.x0 + REGION.w - 1);
+	const weeds = Array.from({ length: 16 }, (_, i) => seaweedClump(i + 1));
+	for (let i = 0; i < 110; i++) {
+		const m = new THREE.Mesh(weeds[i % weeds.length], weedMat);
+		const x = rr(BEACH.x0, BEACH.x1);
 		const z = SHORE_Z + 4.6 + (fbm(x * 0.4, 1.3) - 0.5) * 1.6 + rr(-0.3, 0.3);
 		m.position.set(x, smoothGroundY(x, z), z);
 		m.rotation.y = rr(0, 6.3);
@@ -503,7 +510,9 @@ function buildDecor() {
 		m.receiveShadow = true;
 		decor.add(m);
 	}
-	for (const [x, z, s] of [[-4.2, SHORE_Z + 4.9, 2], [6.8, SHORE_Z + 5.4, 5]]) {
+	const logs = [[-4.2, SHORE_Z + 4.9, 2], [6.8, SHORE_Z + 5.4, 5]];
+	for (let i = 0; i < 7; i++) logs.push([rr(BEACH.x0, BEACH.x1), SHORE_Z + rr(4.6, 7), 11 + i]);
+	for (const [x, z, s] of logs) {
 		const log = driftwood(s);
 		log.position.set(x, smoothGroundY(x, z) + 0.03, z);
 		log.rotation.y = rr(-0.6, 0.6);
@@ -523,7 +532,6 @@ scene.add(boat);
 // ---------- game state ----------
 let things = [];
 let runners = [];
-let risers = [];
 const player = { x: 0, z: -0.8, vx: 0, vz: 0, bob: 0, stride: 0, foot: 1 };
 const coil = { x: 0.3, z: -2.9, tx: 0.3, tz: -2.9, y: 0 };
 let pointer = { sx: 0, sy: 0, has: false, touch: false };
@@ -574,7 +582,10 @@ function surfaceStamps() {
 		if (b.kind.id === "worm") stamps.push({ type: 4, x: b.x + rr(-0.05, 0.05), z: b.z + rr(-0.05, 0.05), r: 0.022, d: 0.01, ang: rr(0, 6.3) });
 		else if (b.kind.id !== "turtle") stamps.push({ type: 3, x: b.x + rr(-0.04, 0.04), z: b.z + rr(-0.04, 0.04), r: b.kind.id === "crab" ? 0.022 : 0.012, d: 0.035, ang: 0 });
 	});
-	let x = rr(-6, 6), z = REGION.z0 + REGION.h - 1;
+	for (let n = 0; n < 6; n++) walkerTrail(n === 0 ? rr(-6, 6) : rr(SPAWN.x0, SPAWN.x1));
+}
+function walkerTrail(x0) {
+	let x = x0, z = REGION.z0 + REGION.h - 1;
 	const drift = rr(-0.25, 0.25), wob = rr(0, 6);
 	for (let i = 0; z > SHORE_Z + 3.0; i++) {
 		const dx = drift + Math.sin(i * 0.12 + wob) * 0.25;
@@ -712,6 +723,7 @@ function updateWater(t, now, dt) {
 }
 function startTide() {
 	if (tide || busy) return;
+	if (DIG.on) { setTimeout(startTide, 500); return; }
 	tide = { start: performance.now(), swapped: false };
 }
 function tideOffset(now) {
@@ -736,7 +748,7 @@ function tideOffset(now) {
 		return TIDE_FULL * (1 - b * b * (3 - 2 * b));
 	}
 	tide = null;
-	toast("The tide went out. New stuff washed in.");
+	toast("The tide went out and moved the sand around.");
 	return 0;
 }
 
@@ -778,15 +790,6 @@ function updateSpray(t, dt) {
 
 // ---------- detector ----------
 let nextBeep = 0, beepFlash = 0;
-function vdiKind(v) {
-	if (v < 20) return "IRON";
-	if (v < 35) return "FOIL";
-	if (v < 50) return "TAB";
-	if (v < 63) return "GOLD?";
-	if (v < 80) return "BRASS";
-	if (v < 90) return "COIN";
-	return "!!!";
-}
 function holeDepthAt(x, z) {
 	let best = 0;
 	holes.forEach((h) => { if (Math.hypot(h.x - x, h.z - z) < h.r + 0.05) best = Math.max(best, h.depth); });
@@ -794,7 +797,7 @@ function holeDepthAt(x, z) {
 }
 function updateSignal() {
 	let best = 0, target = null, bestD = 0;
-	if (started && !tide && !busy) {
+	if (started && !tide && !busy && !DIG.on) {
 		things.forEach((b) => {
 			if (b.found || b.cat !== "metal") return;
 			const d = Math.hypot(b.x - coil.x, b.z - coil.z);
@@ -808,25 +811,29 @@ function updateSignal() {
 	signal.target = target;
 	signal.dist = bestD;
 }
-const lcdId = document.getElementById("lcdId");
-const lcdKind = document.getElementById("lcdKind");
+const scaleEl = document.getElementById("scale");
+const needleEl = document.getElementById("needle");
 const depthEl = document.getElementById("depth");
 const barsEl = document.getElementById("bars");
 const bars = [];
 for (let i = 0; i < 10; i++) { const b = document.createElement("i"); barsEl.appendChild(b); bars.push(b); }
-let lastLcd = "";
+let lastLcd = "", needleV = 50;
 function updateLcd() {
 	const s = signal.s, tg = signal.target;
 	const lit = Math.round(s * 10);
-	const showId = s > 0.2 && tg;
-	const key = lit + "|" + (showId ? tg.kind.vdi : "-") + "|" + (showId && signal.dist < REVEAL_METAL);
+	const showId = s > 0.15 && tg;
+	const close = showId && signal.dist < REVEAL_METAL;
+	const key = lit + "|" + (showId ? tg.kind.vdi : "-") + "|" + close;
 	if (key === lastLcd && rand() > 0.12) return;
 	lastLcd = key;
-	const id = showId ? clamp(tg.kind.vdi + Math.round((rand() - 0.5) * (1 - s) * 10), 0, 99) : 0;
-	lcdId.textContent = showId ? (id < 10 ? "0" + id : id) : "--";
-	lcdKind.textContent = showId ? vdiKind(tg.kind.vdi) : "";
-	if (showId && signal.dist < REVEAL_METAL) {
-		depthEl.textContent = "DIG ~" + Math.max(2, Math.round((tg.depth - holeDepthAt(tg.x, tg.z)) / 2 + rand() * 2) * 2) + "cm";
+	if (showId) {
+		// weak or off-centre signals wander on the scale, like the real thing
+		needleV = clamp(tg.kind.vdi + (rand() - 0.5) * (1 - s) * 30, 1, 99);
+		needleEl.style.left = needleV + "%";
+	}
+	scaleEl.classList.toggle("on", !!showId);
+	if (close) {
+		depthEl.textContent = "DEPTH ~" + Math.max(2, Math.round((tg.depth - holeDepthAt(tg.x, tg.z)) / 2 + rand() * 2) * 2) + " cm";
 		depthEl.className = "lbl hot";
 	} else {
 		depthEl.textContent = "";
@@ -836,7 +843,7 @@ function updateLcd() {
 }
 function beepTick(now) {
 	const s = signal.s;
-	if (s <= 0.02 || !signal.target || busy) return;
+	if (s <= 0.02 || !signal.target || busy || DIG.on) return;
 	if (now < nextBeep) return;
 	const base = 200 + signal.target.kind.vdi * 9;
 	tone(base * (1 + 0.25 * s), 0.05 + 0.04 * s, "square", 0.035 + 0.05 * s);
@@ -846,7 +853,7 @@ function beepTick(now) {
 
 // ---------- digging ----------
 const sandBits = (() => {
-	const n = 500;
+	const n = 1400;
 	const im = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ roughness: 0.95 }), n);
 	im.castShadow = true;
 	im.frustumCulled = false;
@@ -860,22 +867,25 @@ const sandBits = (() => {
 	scene.add(im);
 	return { im, n, head: 0, p: new Float32Array(n * 3), v: new Float32Array(n * 3), life: new Float32Array(n), s: new Float32Array(n), rot: new Float32Array(n) };
 })();
-function throwSand(x, z, dirAng, count) {
+function spawnGrain(x, y, z, vx, vy, vz, size) {
 	const B = sandBits;
+	const i = B.head;
+	B.head = (B.head + 1) % B.n;
+	B.p[i * 3] = x;
+	B.p[i * 3 + 1] = y;
+	B.p[i * 3 + 2] = z;
+	B.v[i * 3] = vx;
+	B.v[i * 3 + 1] = vy;
+	B.v[i * 3 + 2] = vz;
+	B.life[i] = 1;
+	B.s[i] = size;
+	B.rot[i] = rr(0, 6);
+}
+function throwSand(x, z, dirAng, count) {
 	const y = groundY(x, z);
 	for (let k = 0; k < count; k++) {
-		const i = B.head;
-		B.head = (B.head + 1) % B.n;
-		const a = dirAng + rr(-0.9, 0.9), sp = rr(0.4, 1.4);
-		B.p[i * 3] = x + rr(-0.05, 0.05);
-		B.p[i * 3 + 1] = y + 0.02;
-		B.p[i * 3 + 2] = z + rr(-0.05, 0.05);
-		B.v[i * 3] = Math.cos(a) * sp;
-		B.v[i * 3 + 1] = rr(1.0, 2.4);
-		B.v[i * 3 + 2] = Math.sin(a) * sp;
-		B.life[i] = 1;
-		B.s[i] = rr(0.004, 0.012);
-		B.rot[i] = rr(0, 6);
+		const a = dirAng + rr(-0.9, 0.9), sp = rr(0.3, 0.9);
+		spawnGrain(x + rr(-0.05, 0.05), y + 0.02, z + rr(-0.05, 0.05), Math.cos(a) * sp, rr(0.6, 1.6), Math.sin(a) * sp, rr(0.003, 0.009));
 	}
 }
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
@@ -906,24 +916,76 @@ function updateSand(dt) {
 	B.im.instanceMatrix.needsUpdate = true;
 }
 
-function dig(x, z) {
-	if (busy || tide || !started) return;
-	if (groundY(x, z) < waterHigh + 0.008) {
-		toast("That's the sea. You can't dig the sea.");
-		return;
-	}
+// Digging is done with a long-handled sand scoop. Each scoop stabs into the hole,
+// levers out a load, and gets shaken over the sand pile so the sand falls through.
+const scoop = makeScoop();
+scoop.visible = false;
+scene.add(scoop);
+const DIG = {
+	on: false,       // a dig is in progress
+	held: false,     // the dig button is still down
+	hole: null,
+	t: 0,            // time into the current scoop
+	phase: "",       // in, scoop, out
+	pt: 0,           // time into the phase
+	found: [],       // things in the current scoop
+	lay: 0,          // 0 = holding the detector, 1 = it's lying on the sand
+	f: new THREE.Vector3(), r: new THREE.Vector3()
+};
+const SCOOP_KEYS = [
+	// t, along (towards the hole), side, height ref, height, handle elevation (deg)
+	[0.00, -0.22, 0.04, "surf", 0.28, 55],
+	[0.30, 0.05, 0.00, "surf", 0.10, 66],
+	[0.52, 0.01, 0.00, "bottom", -0.025, 68],
+	[0.82, -0.06, 0.02, "bottom", 0.035, 30],
+	[1.12, -0.08, 0.30, "surf", 0.34, 42]
+];
+const SCOOP_T = 1.12, SIFT_T = 0.95, BACK_T = 0.38, DIG_EVENT = 0.48;
+const CARRY = [0, -0.6, 0.35, "surf", 0.5, 40];
+const SHOW = [0, -0.3, 0.12, "surf", 0.62, 14]; // tipped toward you so you can see what's in it
+
+function digProblem(x, z) {
+	if (groundY(x, z) < waterNow + 0.01) return "That's under water right now. Wait for the wave to go back out.";
+	const h = holeAt(x, z);
+	if (h && h.depth >= MAX_HOLE) return "That's as deep as the scoop reaches.";
+	return null;
+}
+function holeAt(x, z) {
 	let hole = null, hd = Infinity;
 	holes.forEach((h) => {
 		const d = Math.hypot(h.x - x, h.z - z);
-		if (d < h.r && d < hd) { hole = h; hd = d; }
+		if (d < h.r + 0.03 && d < hd) { hole = h; hd = d; }
 	});
-	if (hole && hole.depth >= MAX_HOLE) {
-		toast("That's deep enough. Any deeper and you'll come out the other side.");
-		return;
-	}
+	return hole;
+}
+function startDig(x, z) {
+	if (busy || tide || !started || DIG.on) return;
+	const p = digProblem(x, z);
+	if (p) { toast(p); return; }
+	let hole = holeAt(x, z);
+	DIG.f.set(x - player.x, 0, z - player.z).normalize();
+	DIG.r.set(-DIG.f.z, 0, DIG.f.x);
 	if (!hole) {
-		const ang = Math.atan2(player.z - z, player.x - x) + rr(-0.9, 0.9) + (rand() < 0.5 ? 1.2 : -1.2);
-		hole = { type: 0, x, z, depth: 0, r: holeR(0), d: 0, ang };
+		// the pile goes where the scoop gets shaken out: off to the right
+		hole = { type: 0, x, z, depth: 0, r: holeR(0), d: 0, ang: Math.atan2(DIG.r.z, DIG.r.x) + rr(-0.25, 0.25), fresh: true };
+	}
+	DIG.on = true;
+	DIG.hole = hole;
+	// step up to the hole so you're digging at your feet
+	DIG.stand = { x: clamp(hole.x - DIG.f.x * 0.85, WALK.x0, WALK.x1), z: clamp(hole.z - DIG.f.z * 0.85, WALK.z0, WALK.z1) };
+	DIG.phase = "walk";
+	DIG.pt = 0;
+	DIG.t = 0;
+	DIG.found = [];
+	walkTarget = null;
+	walkRing.visible = false;
+}
+function digOnce() {
+	DIG.critter = false;
+	// the moment the scoop bites: the hole gets deeper and we see what came up with it
+	const hole = DIG.hole;
+	if (hole.fresh) {
+		delete hole.fresh;
 		holes.push(hole);
 		stamps.push(hole);
 	}
@@ -931,48 +993,184 @@ function dig(x, z) {
 	hole.r = holeR(hole.depth);
 	hole.d = hole.depth / 100;
 	bakeAround(hole);
-	throwSand(hole.x, hole.z, hole.ang, 40);
+	clearDecor(hole.x, hole.z, hole.r + 0.06);
+	throwSand(hole.x, hole.z, Math.atan2(-DIG.f.z, -DIG.f.x), 14);
 	digSound(hole.depth);
-
 	const found = [];
-	let deeperMetal = false;
 	things.forEach((b) => {
 		if (b.found) return;
 		const d = Math.hypot(b.x - hole.x, b.z - hole.z);
 		const reach = b.cat === "metal" ? REVEAL_METAL : REVEAL_OTHER;
 		if (d > Math.max(reach, hole.r + 0.04)) return;
 		if (b.depth <= hole.depth) found.push(b);
-		else if (b.cat === "metal") deeperMetal = true;
 	});
-	if (!found.length) {
-		tone(110, 0.18, "sine", 0.15, 0.3);
-		if (deeperMetal) toast(hole.depth < 20 ? "The signal's still under you. Keep digging." : "Deeper still. You can hear it humming.");
-		else toast(EMPTY_LINES[Math.floor(rand() * EMPTY_LINES.length)] + (hole.depth > DIG_STEP ? " (" + hole.depth + " cm down)" : ""));
-		return;
-	}
 	found.forEach((b) => {
 		b.found = true;
-		const isNew = !finds[b.kind.id];
 		finds[b.kind.id] = (finds[b.kind.id] || 0) + 1;
+		b.isNew = finds[b.kind.id] === 1;
 		if (b.cat === "critter") {
-			releaseCritter(b.kind, hole);
-			toast(b.kind.toast);
-			findJingle("critter");
-			renderTray(b.kind.id);
+			DIG.critter = true;
+			setTimeout(() => {
+				releaseCritter(b.kind, hole);
+				toast(b.kind.toast);
+				findJingle("critter");
+				renderTray(b.kind.id);
+			}, 280);
 		} else {
-			cardQueue.push({ kind: b.kind, isNew, depth: b.depth, hole });
+			const obj = buildItem(b.kind, 0.17);
+			const n = DIG.found.length;
+			obj.position.set((n % 2 ? 1 : -1) * Math.min(n, 1) * 0.05, 0, (n > 1 ? 0.04 : 0));
+			obj.rotation.y = rr(0, 6.3);
+			scoop.userData.slot.add(obj);
+			DIG.found.push(b);
 		}
 	});
-	saveFinds();
-	if (cardQueue.length && !busy) nextCard();
+	if (found.length) saveFinds();
+}
+// pebbles and shells lying where you dig go into the scoop with the sand
+const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
+function clearDecor(x, z, r) {
+	decor.children.forEach((im) => {
+		const pos = im.userData.pos;
+		if (!pos) return;
+		let hit = false;
+		for (let i = 0; i < pos.length / 2; i++) {
+			if (Math.hypot(pos[i * 2] - x, pos[i * 2 + 1] - z) < r) { im.setMatrixAt(i, _zero); pos[i * 2] = 1e9; hit = true; }
+		}
+		if (hit) im.instanceMatrix.needsUpdate = true;
+	});
+}
+function moreBelow() {
+	const hole = DIG.hole;
+	return things.some((b) => !b.found && b.cat === "metal" && Math.hypot(b.x - hole.x, b.z - hole.z) < Math.max(REVEAL_METAL, hole.r + 0.04));
+}
+// where the scoop is for a keyframe: basket position and handle elevation
+const _kp = new THREE.Vector3();
+function keyPose(k, out) {
+	const hole = DIG.hole;
+	const surf = smoothGroundY(hole.x, hole.z);
+	const bottom = hole.depth > 0 ? groundY(hole.x, hole.z) : surf;
+	// on a narrow portrait screen, keep the scoop closer to the middle
+	const sideK = clamp(W / H, 0.5, 1);
+	out.set(hole.x, 0, hole.z).addScaledVector(DIG.f, k[1]).addScaledVector(DIG.r, k[2] * sideK);
+	out.y = (k[3] === "surf" ? Math.max(surf, groundY(out.x, out.z)) : bottom) + k[4];
+	return k[5] * Math.PI / 180;
+}
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _back = new THREE.Vector3(), _X = new THREE.Vector3(), _Y = new THREE.Vector3(), _Z = new THREE.Vector3(), _sm = new THREE.Matrix4(), _sq = new THREE.Quaternion();
+const UP = new THREE.Vector3(0, 1, 0);
+function poseScoop(pos, elev, roll) {
+	const phi = elev - SCOOP_HANDLE_ANGLE;
+	_back.copy(DIG.f).negate();
+	_Z.copy(_back).multiplyScalar(Math.cos(phi)).addScaledVector(UP, Math.sin(phi));
+	_Y.copy(_back).multiplyScalar(-Math.sin(phi)).addScaledVector(UP, Math.cos(phi));
+	_X.crossVectors(_Y, _Z).normalize();
+	_sm.makeBasis(_X, _Y, _Z);
+	scoop.quaternion.setFromRotationMatrix(_sm);
+	if (roll) scoop.quaternion.premultiply(_sq.setFromAxisAngle(_Z, roll));
+	scoop.position.copy(pos);
+}
+const ease = (x) => x * x * (3 - 2 * x);
+function lerpKeys(k0, k1, u) {
+	const e0 = keyPose(k0, _a), e1 = keyPose(k1, _b);
+	const w = ease(clamp(u, 0, 1));
+	_a.lerp(_b, w);
+	return e0 + (e1 - e0) * w;
+}
+function siftAt(dt) {
+	// sand pouring through the holes in the basket
+	const n = Math.floor(dt * 260 + rand());
+	for (let k = 0; k < n; k++) {
+		_p.set(rr(-0.11, 0.11), -0.005, rr(-0.12, 0.1)).applyMatrix4(scoop.matrixWorld);
+		spawnGrain(_p.x, _p.y, _p.z, rr(-0.15, 0.15), rr(-0.4, 0), rr(-0.15, 0.15), rr(0.002, 0.006));
+	}
+}
+function updateDig(dt, now) {
+	// lay the detector down while digging, pick it up again after
+	DIG.lay = clamp(DIG.lay + (DIG.on ? dt : -dt) / 0.6, 0, 1);
+	if (!DIG.on) return;
+	DIG.pt += dt;
+	let elev, roll = 0;
+	if (DIG.phase === "walk") return;
+	if (DIG.phase === "in") {
+		scoop.visible = true;
+		const u = DIG.pt / 0.35;
+		elev = lerpKeys(CARRY, SCOOP_KEYS[0], u);
+		if (u >= 1) { DIG.phase = "scoop"; DIG.pt = 0; DIG.bit = false; }
+	} else if (DIG.phase === "scoop") {
+		const t = DIG.pt;
+		if (!DIG.bit && t >= DIG_EVENT) { DIG.bit = true; digOnce(); }
+		if (t < SCOOP_T) {
+			let i = 0;
+			while (i < SCOOP_KEYS.length - 2 && t > SCOOP_KEYS[i + 1][0]) i++;
+			const k0 = SCOOP_KEYS[i], k1 = SCOOP_KEYS[i + 1];
+			elev = lerpKeys(k0, k1, (t - k0[0]) / (k1[0] - k0[0]));
+			scoop.userData.setLoad(t > 0.55 ? clamp((t - 0.55) / 0.2, 0, 1) : 0);
+		} else {
+			// shake it out
+			const st = t - SCOOP_T;
+			elev = keyPose(SCOOP_KEYS[SCOOP_KEYS.length - 1], _a);
+			const shake = Math.sin(st * 31) * (1 - smooth(SIFT_T - 0.25, SIFT_T, st));
+			_a.addScaledVector(DIG.r, shake * 0.03).addScaledVector(DIG.f, Math.sin(st * 17) * 0.008);
+			roll = shake * 0.09;
+			const load = 1 - clamp(st / (SIFT_T - 0.15), 0, 1);
+			scoop.userData.setLoad(load);
+			if (load > 0) siftAt(dt);
+			if (st >= SIFT_T) {
+				scoop.userData.setLoad(0);
+				DIG.phase = "show";
+				DIG.pt = 0;
+				if (DIG.found.length) {
+					DIG.found.forEach((b) => cardQueue.push({ kind: b.kind, isNew: b.isNew, depth: b.depth }));
+					findJingle(DIG.found.reduce((best, b) => (WEIGHT[b.kind.tier] < WEIGHT[best] ? b.kind.tier : best), "common"));
+				} else {
+					tone(110, 0.18, "sine", 0.12);
+					const d = DIG.hole.depth;
+					if (moreBelow()) toast(d < MAX_HOLE ? "There's still a signal below. Keep digging." : "It's deeper than the scoop can reach.");
+					else if (!DIG.critter) toast(EMPTY_LINE + " (" + d + " cm down)");
+				}
+			}
+		}
+	}
+	const lastKey = SCOOP_KEYS[SCOOP_KEYS.length - 1];
+	if (DIG.phase === "show") {
+		if (DIG.found.length) {
+			elev = lerpKeys(lastKey, SHOW, DIG.pt / 0.45);
+			_a.y += Math.sin(DIG.pt * 2.5) * 0.004;
+			if (DIG.pt > 1.1 && !busy && cardQueue.length) nextCard();
+		} else {
+			elev = keyPose(lastKey, _a);
+			if (DIG.pt > 0.15) { DIG.phase = "back"; DIG.pt = 0; DIG.shown = false; }
+		}
+	}
+	if (DIG.phase === "back") {
+		const u = DIG.pt / BACK_T;
+		const again = DIG.held && !digProblem(DIG.hole.x, DIG.hole.z) && !tide;
+		elev = lerpKeys(DIG.shown ? SHOW : lastKey, again ? SCOOP_KEYS[0] : CARRY, u);
+		if (u >= 1) {
+			if (again) { DIG.phase = "scoop"; DIG.pt = 0; DIG.bit = false; }
+			else { DIG.on = false; scoop.visible = false; }
+		}
+	}
+	poseScoop(_a, elev, roll);
+}
+function emptyScoop() {
+	const slot = scoop.userData.slot;
+	while (slot.children.length) slot.remove(slot.children[0]);
+	DIG.found = [];
 }
 
-function buildItem(kind) {
+function buildItem(kind, fit) {
 	const o = ITEM_BUILDERS[kind.id]();
 	o.scale.multiplyScalar(ITEM_SCALE);
 	const wrap = new THREE.Group();
 	wrap.add(o);
-	const box = new THREE.Box3().setFromObject(o);
+	let box = new THREE.Box3().setFromObject(o);
+	if (fit) {
+		const sz = box.getSize(new THREE.Vector3());
+		const m = Math.max(sz.x, sz.z, sz.y * 1.4);
+		const want = clamp(m, 0.075, fit);
+		if (want !== m) { o.scale.multiplyScalar(want / m); box = new THREE.Box3().setFromObject(o); }
+	}
 	o.position.y -= box.min.y;
 	o.position.x -= (box.min.x + box.max.x) / 2;
 	o.position.z -= (box.min.z + box.max.z) / 2;
@@ -985,35 +1183,7 @@ function nextCard() {
 	const c = cardQueue.shift();
 	if (!c) return;
 	busy = true;
-	const obj = buildItem(c.kind);
-	const y0 = groundY(c.hole.x, c.hole.z) - 0.02;
-	obj.position.set(c.hole.x, y0, c.hole.z);
-	scene.add(obj);
-	risers.push({ obj, kind: c.kind, y0, t: 0, out: 0 });
-	findJingle(c.kind.tier);
-	throwSand(c.hole.x, c.hole.z, c.hole.ang, 25);
-	setTimeout(() => showCard(c.kind, c.isNew, true, c.depth), 1000);
-}
-
-function updateRisers(dt, now) {
-	risers = risers.filter((r) => {
-		r.t += dt;
-		const a = Math.min(1, r.t / 0.8);
-		const ease = 1 - Math.pow(1 - a, 3);
-		let y = r.y0 + ease * 0.32;
-		if (r.out > 0) {
-			r.out += dt;
-			const b = Math.min(1, r.out / 0.45);
-			y += b * b * 0.6;
-			r.obj.scale.setScalar(Math.max(0.001, 1 - b));
-			if (b >= 1) { scene.remove(r.obj); return false; }
-		}
-		r.obj.position.y = y + Math.sin(now / 500) * 0.01 * ease;
-		r.obj.rotation.y += dt * 0.9;
-		const sp = r.obj.userData.inner.userData.spin;
-		if (sp) sp(now / 1000);
-		return true;
-	});
+	showCard(c.kind, c.isNew, true, c.depth);
 }
 
 // ---------- critters running away ----------
@@ -1110,7 +1280,12 @@ function updatePlayer(dt, t) {
 		tx = ix / l;
 		tz = iz / l;
 	}
-	const speed = busy || tide ? 0 : 1.35;
+	let speed = busy || tide || DIG.on ? 0 : 1.35;
+	if (DIG.on && DIG.stand) {
+		const dx = DIG.stand.x - player.x, dz = DIG.stand.z - player.z, d = Math.hypot(dx, dz);
+		if (d > 0.03) { tx = dx / d; tz = dz / d; speed = Math.min(1.3, d * 5); }
+		else if (DIG.phase === "walk") { DIG.phase = "in"; DIG.pt = 0; }
+	}
 	const k = 1 - Math.exp(-dt * 8);
 	player.vx += (tx * speed - player.vx) * k;
 	player.vz += (tz * speed - player.vz) * k;
@@ -1132,13 +1307,23 @@ function updatePlayer(dt, t) {
 		const wet = groundY(fx, fz) < waterHigh + 0.03;
 		const pr = { type: player.foot > 0 ? 2 : 1, x: fx, z: fz, r: 1, d: wet ? 0.008 : 0.014, ang: -ang };
 		stamps.push(pr);
-		if (stamps.length > 900) stamps.splice(0, 1);
+		if (stamps.length > 900) {
+			const old = stamps.findIndex((q) => q.type === 1 || q.type === 2);
+			if (old >= 0) stamps.splice(old, 1);
+		}
 		bakeAround(pr);
 	}
+	followRegion(false);
 	const gy = smoothGroundY(player.x, player.z);
 	const bobY = Math.sin(player.bob) * 0.018 * clamp(Math.hypot(player.vx, player.vz), 0, 1);
 	camera.position.set(player.x + Math.sin(player.bob * 0.5) * 0.01, gy + EYE + bobY, player.z + 0.15);
-	camera.rotation.set(-pitch, 0, Math.sin(player.bob * 0.5) * 0.004);
+	let lookDown = pitch;
+	if (DIG.lay > 0 && DIG.hole) {
+		// look down at the hole, a little above centre so the tray doesn't cover it
+		const hd = Math.hypot(DIG.hole.x - player.x, DIG.hole.z - player.z - 0.15);
+		lookDown += (Math.atan2(gy + EYE - smoothGroundY(DIG.hole.x, DIG.hole.z), hd) - 0.1 - pitch) * ease(DIG.lay);
+	}
+	camera.rotation.set(-lookDown, 0, Math.sin(player.bob * 0.5) * 0.004);
 	camera.updateMatrixWorld();
 
 	// the coil follows the pointer, as far as your arms reach
@@ -1148,7 +1333,7 @@ function updatePlayer(dt, t) {
 			const c = reachClamp(g);
 			coil.tx = c.x;
 			coil.tz = c.z;
-			walkRing.visible = c.beyond && !busy && !tide;
+			walkRing.visible = c.beyond && !busy && !tide && !DIG.on;
 			if (walkRing.visible) walkRing.position.set(g.x, smoothGroundY(g.x, g.z) + 0.01, g.z);
 		} else walkRing.visible = false;
 	} else {
@@ -1171,6 +1356,18 @@ function updatePlayer(dt, t) {
 	groundN.set(smoothGroundY(coil.x - e, coil.z) - smoothGroundY(coil.x + e, coil.z), 2 * e, smoothGroundY(coil.x, coil.z - e) - smoothGroundY(coil.x, coil.z + e)).normalize();
 	coilPos.set(coil.x, coil.y, coil.z);
 	handPos.set(player.x + 0.27 + (coil.x - player.x) * 0.12, gy + 1.0 + bobY, player.z - 0.3);
+	if (DIG.lay > 0) {
+		// set down on the sand to your right while you dig
+		const w = ease(DIG.lay);
+		const fx = DIG.f.x, fz = DIG.f.z, rx = -fz, rz = fx;
+		const cx = player.x + rx * 1.05 + fx * 1.15, cz = player.z + rz * 1.05 + fz * 1.15;
+		_kp.set(cx, smoothGroundY(cx, cz) + 0.012, cz);
+		coilPos.lerp(_kp, w);
+		const hx = player.x + rx * 0.95 + fx * 0.05, hz = player.z + rz * 0.95 + fz * 0.05;
+		_kp.set(hx, smoothGroundY(hx, hz) + 0.075, hz);
+		handPos.lerp(_kp, w);
+		groundN.lerp(UP, w).normalize();
+	}
 	detector.visible = started && !tide;
 	if (detector.visible) detector.userData.update(coilPos, groundN, handPos);
 
@@ -1228,11 +1425,8 @@ function render() {
 	renderer.render(scene, camera);
 }
 
-let last = performance.now(), frameAvg = 16, slowFrames = 0, fixedTime = null;
-function frame(now) {
-	const dt = Math.min(0.05, (now - last) / 1000);
-	frameAvg = frameAvg * 0.95 + (now - last) * 0.05;
-	last = now;
+let simNow = 0;
+function update(dt, now) {
 	const t = fixedTime !== null ? fixedTime : (now / 1000) % 980;
 	U.uTime.value = t;
 	updateWater(t, now, dt);
@@ -1242,10 +1436,17 @@ function frame(now) {
 	beepFlash = Math.max(0, beepFlash - dt * 6);
 	updateLcd();
 	updateRunners(dt);
-	updateRisers(dt, now);
+	updateDig(dt, now);
 	updateSand(dt);
 	updateSpray(t, dt);
 	updateLife(t, dt);
+}
+let last = performance.now(), frameAvg = 16, slowFrames = 0, fixedTime = null;
+function frame(now) {
+	const dt = Math.min(0.05, (now - last) / 1000);
+	frameAvg = frameAvg * 0.95 + (now - last) * 0.05;
+	last = now;
+	update(dt, now);
 	if (frameAvg > 26 && quality > 0.6 && fixedTime === null) {
 		if (++slowFrames > 90) { quality *= 0.85; resize(); slowFrames = 0; frameAvg = 16; }
 	} else slowFrames = 0;
@@ -1376,7 +1577,7 @@ function renderTray(popId) {
 }
 function updateLeft() {
 	const left = things.filter((b) => b.cat === "metal" && !b.found).length;
-	document.getElementById("left").textContent = left ? left + " metal signals here" : "Beach cleared!";
+	document.getElementById("left").textContent = left ? left + " targets left on the beach" : "Beach cleared";
 }
 
 const cardOverlay = document.getElementById("cardOverlay");
@@ -1385,7 +1586,7 @@ let pendingPop = null;
 function showCard(k, isNew, fresh, depth) {
 	busy = true;
 	pendingPop = fresh ? k.id : null;
-	const worth = k.tier === "critter" ? "" : '<div class="worth">' + (k.value ? "Worth " + money(k.value) : "Worth nothing. Keep it anyway.") + "</div>";
+	const worth = k.tier === "critter" ? "" : '<div class="worth">' + (k.value ? "Worth " + money(k.value) : "No value") + "</div>";
 	cardEl.innerHTML =
 		'<div class="big"></div>' +
 		(isNew ? '<div class="new">NEW FIND!</div>' : "") +
@@ -1413,14 +1614,14 @@ function closeCard() {
 	cardOverlay.classList.remove("show");
 	cardOpen = false;
 	busy = false;
-	risers.forEach((r) => { if (!r.out) r.out = 0.0001; });
 	renderTray(pendingPop);
 	if (pendingPop) {
 		pendingPop = null;
 		if (cardQueue.length) { nextCard(); return; }
+		if (DIG.on && DIG.phase === "show") { emptyScoop(); DIG.phase = "back"; DIG.pt = 0; DIG.shown = true; }
 		updateLeft();
 		if (things.every((b) => b.cat !== "metal" || b.found)) {
-			toast("Beach cleared! Here comes the tide…");
+			toast("That's everything on this stretch. The tide is coming in.");
 			setTimeout(startTide, 1400);
 		}
 	}
@@ -1449,8 +1650,9 @@ canvas.addEventListener("pointerdown", (e) => {
 	}
 	const g = screenToGround(e.clientX, e.clientY);
 	if (g && reachClamp(g).beyond) walkTarget = { x: g.x, z: g.z };
-	else dig(coil.x, coil.z);
+	else { DIG.held = true; startDig(coil.x, coil.z); }
 });
+window.addEventListener("pointerup", (e) => { if (e.pointerType !== "touch") DIG.held = false; });
 canvas.addEventListener("pointerup", (e) => {
 	if (!touchStart || !started) return;
 	const moved = Math.hypot(e.clientX - touchStart.x, e.clientY - touchStart.y);
@@ -1461,14 +1663,22 @@ canvas.addEventListener("pointerup", (e) => {
 	touchStart = null;
 });
 canvas.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") walkRing.visible = false; });
-document.getElementById("digBtn").addEventListener("click", () => dig(coil.x, coil.z));
+const digBtn = document.getElementById("digBtn");
+digBtn.addEventListener("pointerdown", (e) => { e.preventDefault(); DIG.held = true; startDig(coil.x, coil.z); });
+for (const ev of ["pointerup", "pointercancel", "pointerleave"]) digBtn.addEventListener(ev, () => { DIG.held = false; });
 window.addEventListener("keydown", (e) => {
 	keys[e.code] = true;
-	if (e.code === "Space" && !busy && started) { e.preventDefault(); dig(coil.x, coil.z); }
+	if (e.code === "Space") {
+		e.preventDefault();
+		if (!e.repeat && !busy && started) { DIG.held = true; startDig(coil.x, coil.z); }
+	}
 	if (e.code === "Escape" && busy && cardOverlay.classList.contains("show")) closeCard();
 });
-window.addEventListener("keyup", (e) => { keys[e.code] = false; });
-window.addEventListener("blur", () => { for (const k in keys) keys[k] = false; });
+window.addEventListener("keyup", (e) => {
+	keys[e.code] = false;
+	if (e.code === "Space") DIG.held = false;
+});
+window.addEventListener("blur", () => { for (const k in keys) keys[k] = false; DIG.held = false; });
 
 const muteBtn = document.getElementById("muteBtn");
 muteBtn.addEventListener("click", () => {
@@ -1479,7 +1689,7 @@ muteBtn.addEventListener("click", () => {
 document.getElementById("tideBtn").addEventListener("click", () => { if (started) startTide(); });
 if (isTouch) {
 	document.body.classList.add("touch");
-	document.getElementById("digHint").textContent = "Drag to sweep, tap far sand to walk there, and tap DIG to dig.";
+	document.getElementById("digHint").textContent = "Drag to sweep, tap far sand to walk there, and hold DIG to dig.";
 }
 document.getElementById("startBtn").addEventListener("click", () => {
 	document.getElementById("introOverlay").classList.remove("show");
@@ -1515,7 +1725,10 @@ window.beach = {
 	things: () => things,
 	player,
 	coil,
-	dig: (x, z) => dig(x, z),
+	dig: (x, z, hold) => { DIG.held = !!hold; startDig(x === undefined ? coil.x : x, z === undefined ? coil.z : z); },
+	release_: () => { DIG.held = false; },
+	scoop: () => scoop,
+	digState: () => ({ on: DIG.on, phase: DIG.phase, depth: DIG.hole && DIG.hole.depth }),
 	setTime: (t) => { fixedTime = t; },
 	start: () => document.getElementById("startBtn").click(),
 	tide: () => startTide(),
@@ -1524,5 +1737,6 @@ window.beach = {
 	aim: (x, z) => { pointer.has = false; coil.tx = x; coil.tz = z; },
 	release: (id) => releaseCritter(CRITTERS.find((c) => c.id === id), { x: coil.x, z: coil.z, d: 0.05 }),
 	reveal: (id) => { const k = ALL.find((c) => c.id === id); cardQueue.push({ kind: k, isNew: false, depth: 12, hole: { x: coil.x, z: coil.z, ang: 0 } }); nextCard(); },
-	frameAvg: () => frameAvg
+	frameAvg: () => frameAvg,
+	step: (n, dt) => { for (let i = 0; i < n; i++) { simNow += dt * 1000; update(dt, performance.now() + simNow); } return { on: DIG.on, phase: DIG.phase, pt: DIG.pt, depth: DIG.hole && DIG.hole.depth, busy, cards: cardQueue.length }; }
 };

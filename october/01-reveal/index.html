@@ -91,19 +91,32 @@
 			pointer-events: none;
 		}
 		.lcd .row { display: flex; justify-content: space-between; align-items: baseline; }
-		.lcd .lbl { font-size: 15px; opacity: 0.6; }
+		.lcd .lbl { font-size: 16px; opacity: 0.65; }
 		.lcd .lbl.hot { opacity: 1; color: #ffd45e; }
-		.lcd .id { font-size: 40px; line-height: 1; }
-		.lcd .kind { font-size: 22px; }
-		.bars { display: flex; gap: 3px; margin-top: 6px; }
+		.bars { display: flex; gap: 3px; margin: 4px 0 8px; }
 		.bars i {
 			flex: 1;
-			height: 12px;
+			height: 14px;
 			background: rgba(184, 245, 160, 0.15);
 			border-radius: 2px;
 		}
 		.bars i.on { background: #b8f5a0; box-shadow: 0 0 6px #b8f5a0; }
 		.bars i.on.hot { background: #ffd45e; box-shadow: 0 0 6px #ffd45e; }
+		.scale { position: relative; height: 10px; border-radius: 2px; background: linear-gradient(90deg, rgba(184, 245, 160, 0.12) 0 30%, rgba(184, 245, 160, 0.24) 30% 70%, rgba(184, 245, 160, 0.36) 70%); }
+		.scale i {
+			position: absolute;
+			top: -3px;
+			width: 4px;
+			height: 16px;
+			margin-left: -2px;
+			background: #b8f5a0;
+			box-shadow: 0 0 6px #b8f5a0;
+			border-radius: 1px;
+			display: none;
+			transition: left 0.15s;
+		}
+		.scale.on i { display: block; }
+		.ticks { display: flex; justify-content: space-between; font-size: 14px; opacity: 0.65; margin-top: 3px; }
 
 		/* finds tray */
 		.tray {
@@ -188,6 +201,7 @@
 			position: fixed;
 			right: 16px;
 			bottom: 96px;
+			touch-action: none;
 			width: 84px;
 			height: 84px;
 			border-radius: 50%;
@@ -210,16 +224,15 @@
 			transform: translate(-50%, -10px);
 			background: #fff;
 			padding: 8px 16px;
-			border-radius: 999px;
+			border-radius: 14px;
 			font-size: 15px;
 			box-shadow: 0 3px 0 rgba(0, 0, 0, 0.15);
 			opacity: 0;
 			transition: opacity 0.2s, transform 0.2s;
 			pointer-events: none;
-			white-space: nowrap;
-			max-width: calc(100vw - 32px);
-			overflow: hidden;
-			text-overflow: ellipsis;
+			max-width: min(440px, calc(100vw - 32px));
+			text-align: center;
+			line-height: 1.35;
 		}
 		.toast.show { opacity: 1; transform: translate(-50%, 0); }
 
@@ -240,6 +253,8 @@
 			padding: 22px 24px 20px;
 			width: 100%;
 			max-width: 340px;
+			max-height: calc(100% - 8px);
+			overflow-y: auto;
 			text-align: center;
 			box-shadow: 0 8px 0 rgba(0, 0, 0, 0.2);
 			animation: rise 0.35s cubic-bezier(0.2, 1.4, 0.4, 1);
@@ -298,9 +313,10 @@
 	</div>
 
 	<div class="lcd" aria-hidden="true">
-		<div class="row"><span class="lbl">TARGET ID</span><span class="lbl" id="depth"></span></div>
-		<div class="row"><span class="id" id="lcdId">--</span><span class="kind" id="lcdKind"></span></div>
+		<div class="row"><span class="lbl">SIGNAL</span><span class="lbl" id="depth"></span></div>
 		<div class="bars" id="bars"></div>
+		<div class="scale" id="scale"><i id="needle"></i></div>
+		<div class="ticks"><span>IRON</span><span>FOIL&middot;GOLD</span><span>SILVER</span></div>
 	</div>
 
 	<button class="dig" id="digBtn">DIG</button>
@@ -319,9 +335,9 @@
 	<div class="overlay show" id="introOverlay">
 		<div class="card intro">
 			<h1>Beach Detector</h1>
-			<p id="introText">People lose a lot of stuff at the beach. It's all still down there, some of it deep.</p>
-			<p>Sweep the detector over the sand and listen. It beeps faster as you get closer, and higher tones mean shinier metal. Weak signals are deep, so keep digging the same hole. <span id="digHint">Click to dig, click further up the beach to walk there, or use WASD.</span></p>
-			<p>Not everything down there is metal, and not everything down there wants to be found.</p>
+			<p id="introText">People lose a lot of things at the beach, and most of it ends up buried.</p>
+			<p>Sweep the detector over the sand. It beeps faster as you get closer, and the meter shows roughly what kind of metal it is: iron on the left, silver on the right. <span id="digHint">Hold the mouse button or Space to dig with the scoop. Click further up the beach, or use WASD, to walk.</span></p>
+			<p>Deep targets take a few scoops. You'll also dig up things the detector can't hear, and some of what lives in the sand will run.</p>
 			<button class="go" id="startBtn" disabled>Loading the beach…</button>
 		</div>
 	</div>
