@@ -312,7 +312,7 @@
 			<div class="big">🏖️</div>
 			<h1>Beach Detector</h1>
 			<p>People lose a lot of stuff at the beach. It's all still down there, some of it deep.</p>
-			<p>Sweep the detector and listen. It beeps faster as you get closer, and higher tones mean shinier metal. Weak signals are deep, so keep digging the same hole. <span id="digHint">Click to dig.</span></p>
+			<p>Sweep the detector over the sand and listen. It beeps faster as you get closer, and higher tones mean shinier metal. Weak signals are deep, so keep digging the same hole. <span id="digHint">Click to dig.</span></p>
 			<p>Not everything down there is metal, and not everything down there wants to be found.</p>
 			<button class="go" id="startBtn">Switch it on 🔊</button>
 		</div>
@@ -322,6 +322,14 @@
 		<div class="card" id="card"></div>
 	</div>
 
+	<!--
+		The water look takes cues from two pieces Akshay pointed at:
+		Clearwater by Aurélien at Lumaris (https://github.com/Aureliengmz/clearwater, MIT License,
+		Copyright (c) 2026 Lumaris) for the sky, distant headland and water colour, and
+		Marée by Nelson P. Klark (https://3d-experiences.vercel.app/maree) for the low beach view.
+		The headland silhouette function and absorption ratios are adapted from Clearwater;
+		everything else here is written for this page.
+	-->
 	<script id="vs" type="x-shader/x-vertex">
 		attribute vec2 aPos;
 		void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
@@ -333,14 +341,22 @@
 		#else
 		precision mediump float;
 		#endif
-		uniform vec2 uResDev;   // canvas size in device pixels
-		uniform float uScale;   // device pixels per CSS pixel
-		uniform float uShore;   // resting waterline, CSS px from the top
+		// World units are centimetres: x across the beach, y out to sea, z up.
+		// The beach is a plane sloping gently down into the sea: z = -slope * (y - shoreY).
+		uniform float uSlope;
+		uniform float uShoreY;
+		uniform vec4 uRegion;   // world rect the sand textures cover: x0, y0, width, height
+		const vec3 SUN = vec3(-0.66, 0.62, 0.42);   // normalised below
 
 		float hash12(vec2 p) {
 			vec3 p3 = fract(vec3(p.xyx) * 0.1031);
 			p3 += dot(p3, p3.yzx + 33.33);
 			return fract((p3.x + p3.y) * p3.z);
+		}
+		vec2 hash22(vec2 p) {
+			vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+			p3 += dot(p3, p3.yzx + 33.33);
+			return fract((p3.xx + p3.yz) * p3.zy);
 		}
 		float vnoise(vec2 p) {
 			vec2 i = floor(p), f = fract(p);
@@ -357,14 +373,25 @@
 			}
 			return s;
 		}
-		// CSS-pixel position, y down
-		vec2 cssPos() { return vec2(gl_FragCoord.x, uResDev.y - gl_FragCoord.y) / uScale; }
+		float fbm3(vec2 p) {
+			float a = 0.5, s = 0.0;
+			for (int i = 0; i < 3; i++) {
+				s += a * vnoise(p);
+				p = p * 2.03 + vec2(17.1, 9.2);
+				a *= 0.5;
+			}
+			return s;
+		}
+		// past the waterline the sea floor shelves more gently, so the shallows stretch out
+		const float SEA_SLOPE = 0.02;
+		float groundZ(vec2 p) { return p.y > uShoreY ? -SEA_SLOPE * (p.y - uShoreY) : -uSlope * (p.y - uShoreY); }
 	</script>
 
-	<!-- the sand: rendered once (and again after every dig) into two textures -->
+	<!-- the sand, in world space: rendered once, and again around each new hole -->
 	<script id="fsSand" type="x-shader/x-fragment">
 		uniform int uMode;            // 0 = lit colour, 1 = normal + dampness
-		uniform vec4 uHoles[48];      // x, y, radius, depth (CSS px)
+		uniform vec2 uTexSize;
+		uniform vec4 uHoles[48];      // x, y, radius, depth (cm)
 		uniform int uHoleN;
 		uniform vec4 uPrints[40];     // x, y, heading, unused
 		uniform int uPrintN;
@@ -378,16 +405,15 @@
 				vec4 o = uHoles[i];
 				vec2 d = p - o.xy;
 				float r = o.z;
-				// a little wobble so holes aren't perfect ellipses
 				float wob = 1.0 + 0.12 * (vnoise(d * 0.18 + o.xy) - 0.5);
-				float dd = length(d * vec2(1.0, 1.2)) / (r * wob);
+				float dd = length(d) / (r * wob);
 				if (dd < 1.0) {
 					float k = 1.0 - dd * dd;
 					h -= o.w * k;
 					pit = max(pit, k * clamp(o.w / 12.0, 0.4, 1.0));
 				}
-				// thrown-out sand piles up on one side
-				vec2 sp = d - vec2(r * 1.25, r * 0.45);
+				// thrown-out sand piles up beside the hole
+				vec2 sp = d - vec2(r * 1.3, -r * 0.5);
 				h += exp(-dot(sp, sp) / (r * r * 0.6)) * o.w * 0.5 * (0.8 + 0.4 * vnoise(p * 0.3));
 				h += exp(-pow((dd - 1.0) * 4.0, 2.0)) * o.w * 0.12;
 			}
@@ -395,27 +421,26 @@
 		}
 
 		float sandH(vec2 p, out float pit) {
+			float inland = uShoreY - p.y;
 			float h = (fbm(p * 0.0035) - 0.5) * 14.0;
 			// wind ripples on the dry sand
 			vec2 q = p + vec2(fbm(p * 0.006), fbm(p * 0.006 + 5.0)) * 80.0;
-			float ph = dot(q, normalize(vec2(0.28, 1.0))) * 0.11;
+			float ph = dot(q, normalize(vec2(1.0, 0.25))) * 0.11;
 			float r = sin(ph);
 			r = r > 0.0 ? pow(r, 0.7) : -pow(-r, 1.6) * 0.6;
-			float dry = smoothstep(uShore + 50.0, uShore + 150.0, p.y);
+			float dry = smoothstep(60.0, 170.0, inland);
 			h += r * 1.1 * dry * (0.55 + 0.45 * fbm(p * 0.01));
-			// swash marks on the wet sand
-			float wetBand = 1.0 - dry;
-			h += sin(p.y * 0.35 + fbm(p * 0.02) * 9.0) * 0.25 * wetBand;
+			// swash marks and little rills on the wet sand
+			h += sin(p.y * 0.3 + fbm(p * 0.02) * 9.0) * 0.25 * (1.0 - dry);
 			h += (fbm(p * 0.05) - 0.5) * 1.2;
-			// footprints
 			for (int i = 0; i < 40; i++) {
 				if (i >= uPrintN) break;
 				vec4 f = uPrints[i];
-				vec2 d = p - f.xy;
+				vec2 d = (p - f.xy) / 1.35;
 				float c = cos(f.z), s = sin(f.z);
-				d = vec2(c * d.x + s * d.y, -s * d.x + c * d.y);
-				float e1 = length(d / vec2(5.0, 8.5) - vec2(0.0, -0.4));
-				float e2 = length(d / vec2(4.2, 4.2) - vec2(0.0, 1.7));
+				d = vec2(c * d.x - s * d.y, s * d.x + c * d.y);
+				float e1 = length(d / vec2(5.0, 8.5) - vec2(0.0, 0.4));
+				float e2 = length(d / vec2(4.2, 4.2) - vec2(0.0, -1.7));
 				float e = min(e1, e2);
 				h += -(1.0 - smoothstep(0.25, 1.15, e)) * 2.6 + exp(-pow((e - 1.15) * 3.0, 2.0)) * 0.35;
 			}
@@ -424,12 +449,14 @@
 		}
 
 		void main() {
-			vec2 p = cssPos();
+			vec2 tc = gl_FragCoord.xy / uTexSize;
+			vec2 p = uRegion.xy + tc * uRegion.zw;
+			float px = uRegion.z / uTexSize.x;
 			float pit, pitx, pity;
 			float h = sandH(p, pit);
-			float hx = sandH(p + vec2(0.75, 0.0), pitx);
-			float hy = sandH(p + vec2(0.0, 0.75), pity);
-			vec3 n = normalize(vec3(-(hx - h) / 0.75, -(hy - h) / 0.75, 1.0));
+			float hx = sandH(p + vec2(px, 0.0), pitx);
+			float hy = sandH(p + vec2(0.0, px), pity);
+			vec3 n = normalize(vec3(-(hx - h) / px, -(hy - h) / px, 1.0));
 
 			if (uMode == 1) {
 				gl_FragColor = vec4(n.xy * 0.5 + 0.5, pit, 1.0);
@@ -438,132 +465,210 @@
 
 			vec3 alb = mix(vec3(0.87, 0.77, 0.60), vec3(0.77, 0.65, 0.48), smoothstep(0.3, 0.75, fbm(p * 0.012)));
 			alb = mix(alb, vec3(0.93, 0.87, 0.74), smoothstep(0.55, 0.8, fbm(p * 0.03 + 3.0)) * 0.5);
-			// grains: one random value per device pixel keeps them crisp
 			float g = hash12(gl_FragCoord.xy);
 			float g2 = hash12(gl_FragCoord.xy + 71.3);
-			alb *= 0.85 + 0.27 * g;
+			alb *= 0.86 + 0.25 * g;
 			if (g2 > 0.986) alb *= 0.45;
 			else if (g2 > 0.976) alb = mix(alb, vec3(0.72, 0.42, 0.32), 0.5);
 			else if (g2 < 0.007) alb = vec3(0.98, 0.97, 0.94);
-			// heavier dark minerals settle in ripple troughs
-			alb *= 0.94 + 0.06 * smoothstep(-1.0, 1.0, h - (fbm(p * 0.0035) - 0.5) * 14.0);
 
 			// wrack line: dried seaweed where the last high tide reached
-			float wy = uShore + 110.0 + (fbm(vec2(p.x * 0.004, 1.3)) - 0.5) * 60.0;
-			float band = exp(-pow((p.y - wy) / 14.0, 2.0));
-			float weed = smoothstep(0.56, 0.66, fbm(p * vec2(0.05, 0.09) + 9.0)) * band;
+			float inland = uShoreY - p.y;
+			float wy = 120.0 + (fbm(vec2(p.x * 0.004, 1.3)) - 0.5) * 70.0;
+			float band = exp(-pow((inland - wy) / 15.0, 2.0));
+			float weed = smoothstep(0.56, 0.66, fbm(p * vec2(0.09, 0.05) + 9.0)) * band;
 			alb = mix(alb, mix(vec3(0.20, 0.18, 0.10), vec3(0.32, 0.27, 0.14), g), weed * 0.9);
-
-			// the inside of a hole is damp and darker
 			alb = mix(alb, alb * vec3(0.6, 0.57, 0.53), pit);
 
-			vec3 L = normalize(vec3(-0.55, -0.45, 0.7));
+			vec3 L = normalize(SUN);
 			float dif = max(dot(n, L), 0.0);
-			vec3 col = alb * (vec3(0.40, 0.44, 0.50) + vec3(1.0, 0.93, 0.82) * dif * 0.88);
+			vec3 col = alb * (vec3(0.50, 0.54, 0.60) + vec3(1.0, 0.93, 0.82) * dif * 1.05);
 			col *= 1.0 - 0.35 * pit * pit;
-			// quartz glints
 			if (g > 0.996) col += vec3(0.35) * dif;
 
-			vec4 dc = texture2D(uDecor, gl_FragCoord.xy / uResDev);
+			vec4 dc = texture2D(uDecor, tc);
 			col = mix(col, dc.rgb, dc.a);
 			gl_FragColor = vec4(col, 1.0);
 		}
 	</script>
 
-	<!-- every frame: wet sand, the sea, caustics, foam -->
+	<!-- every frame: trace a ray per pixel into sky, sand or sea -->
 	<script id="fsFrame" type="x-shader/x-fragment">
 		uniform sampler2D uCol;
 		uniform sampler2D uNrm;
+		uniform vec2 uResDev;
+		uniform vec4 uCam;      // camera height, pitch, tan(half vfov), aspect
 		uniform float uTime;
-		uniform float uWater;   // current waterline including the tide
+		uniform float uWl;      // water level now (z)
+		uniform float uWlHigh;  // highest the swash has reached lately
 
-		float edgeY(float x, float t) {
-			return uWater + 6.0 * sin(x * 0.011 + t * 0.9) + 4.0 * sin(x * 0.027 - t * 1.4)
-				+ 18.0 * sin(t * 0.5) + (fbm(vec2(x * 0.015, t * 0.25)) - 0.5) * 22.0;
+		// distant headland on the horizon (shape adapted from Clearwater)
+		float ridge(float a) {
+			return 0.040 + 0.016 * sin(a * 2.0 + 0.7) + 0.011 * sin(a * 5.0 + 2.1) + 0.006 * sin(a * 11.0 + 0.3) + 0.003 * sin(a * 23.0 + 1.7);
 		}
 
-		float waveH(vec2 q, float t) {
-			float h = sin(q.y * 0.045 - t * 1.6 + sin(q.x * 0.01 + t * 0.3) * 1.5) * 0.5;
-			h += sin(dot(q, vec2(0.03, 0.02)) - t * 1.1) * 0.3;
-			h += vnoise(q * 0.06 + vec2(t * 0.2, t * 0.6)) * 0.7;
-			h += vnoise(q * 0.15 - vec2(t * 0.5, -t * 0.3)) * 0.3;
+		vec3 sky(vec3 d, bool detail) {
+			vec3 sun = normalize(SUN);
+			float e = d.z;
+			float mu = max(dot(d, sun), 0.0);
+			vec3 hor = vec3(0.74, 0.82, 0.90), zen = vec3(0.24, 0.45, 0.78);
+			vec3 c = mix(hor, zen, pow(clamp(e, 0.0, 1.0), 0.45));
+			c += vec3(1.0, 0.86, 0.66) * (0.25 * pow(mu, 6.0) + 0.35 * pow(mu, 64.0) + 2.0 * pow(mu, 2400.0));
+			if (detail && e > 0.0) {
+				vec2 cp = d.xy / (e + 0.06) * 0.9 + vec2(uTime * 0.004, 0.0);
+				float cl = smoothstep(0.52, 0.85, fbm(cp * 2.2));
+				c = mix(c, vec3(0.97, 0.97, 0.96) * (0.92 + 0.15 * mu), cl * 0.65 * smoothstep(0.0, 0.03, e));
+			}
+			// headland off to the left, softened by a few km of air
+			float a = atan(d.x, d.y);
+			float r = (ridge(a * 1.6) - 0.028) * smoothstep(0.05, -0.35, a);
+			if (r > 0.0) {
+				float tex = fbm3(vec2(a * 300.0, e * 300.0));
+				vec3 land = mix(vec3(0.20, 0.25, 0.22), vec3(0.38, 0.40, 0.38), tex);
+				land = mix(land, hor * 0.9, 0.55);
+				c = mix(c, land, smoothstep(r + 0.0015, r - 0.0015, e) * step(-0.01, e));
+			}
+			return c;
+		}
+
+		// swells rolling in toward the beach, plus chop; lod fades the fine detail with distance
+		float waveH(vec2 q, float t, float lod) {
+			float h = 0.45 * sin(q.y * 0.02 + t * 1.3 + vnoise(q * 0.004) * 4.0);
+			h += 0.35 * sin(dot(q, vec2(0.011, 0.019)) + t * 1.05 + vnoise(q * 0.005 + 3.0) * 3.0);
+			h += 0.3 * sin(dot(q, vec2(-0.016, 0.024)) + t * 1.5);
+			h += 0.2 * sin(dot(q, vec2(0.03, 0.035)) - t * 1.9);
+			h += vnoise(q * 0.012 + vec2(0.1, -0.5) * t * 0.4) * 1.2;
+			h += lod * (vnoise(q * 0.035 + vec2(0.3, -1.0) * t * 0.6) * 0.7 + vnoise(q * 0.1 + vec2(-0.6, -0.8) * t) * 0.35);
 			return h;
 		}
 
-		float caustic(vec2 uv, float time) {
-			vec2 p = mod(uv * 6.2831853, 6.2831853) - 250.0;
-			vec2 i = p;
-			float c = 1.0;
-			float inten = 0.005;
-			for (int n = 0; n < 4; n++) {
-				float t = time * (1.0 - (3.5 / float(n + 1)));
-				i = p + vec2(cos(t - i.x) + sin(t + i.y), sin(t - i.y) + cos(t + i.x));
-				c += 1.0 / length(vec2(p.x / (sin(i.x + t) / inten), p.y / (cos(i.y + t) / inten)));
+		float vorEdge(vec2 x, float t) {
+			vec2 n = floor(x), f = fract(x);
+			float f1 = 8.0, f2 = 8.0;
+			for (int j = -1; j <= 1; j++) {
+				for (int i = -1; i <= 1; i++) {
+					vec2 g = vec2(float(i), float(j));
+					vec2 o = hash22(n + g);
+					o = 0.5 + 0.42 * sin(t + 6.2831 * o);
+					vec2 r = g + o - f;
+					float d = dot(r, r);
+					if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) { f2 = d; }
+				}
 			}
-			c /= 4.0;
-			c = 1.17 - pow(c, 1.4);
-			return pow(abs(c), 8.0);
+			return sqrt(f2) - sqrt(f1);
+		}
+
+		// a bright net of caustics on the sea floor
+		float caustics(vec2 p, float t) {
+			p += vec2(fbm3(p * 0.02 + t * 0.12), fbm3(p * 0.02 + 5.0 - t * 0.12)) * 30.0;
+			float a = vorEdge(p * 0.05, t * 0.8);
+			float b = vorEdge(p * 0.08 + 3.7, t * 1.1);
+			return pow(1.0 - smoothstep(0.0, 0.16, a), 3.0) + 0.55 * pow(1.0 - smoothstep(0.0, 0.12, b), 3.0);
+		}
+
+		vec2 regionUV(vec2 p) { return (p - uRegion.xy) / uRegion.zw; }
+
+		float hitGround(vec3 o, vec3 d) {
+			float t = 1e9;
+			float den = uSlope * d.y + d.z;
+			if (den < -1e-5) t = (uSlope * uShoreY - (uSlope * o.y + o.z)) / den;
+			if (o.y + d.y * t > uShoreY) {
+				den = SEA_SLOPE * d.y + d.z;
+				t = den < -1e-5 ? (SEA_SLOPE * uShoreY - (SEA_SLOPE * o.y + o.z)) / den : 1e9;
+			}
+			return t;
 		}
 
 		void main() {
-			vec2 uv = gl_FragCoord.xy / uResDev;
-			vec2 p = cssPos();
+			vec2 ndc = gl_FragCoord.xy / uResDev * 2.0 - 1.0;
+			float pitch = uCam.y, th = uCam.z;
+			vec3 fw = vec3(0.0, cos(pitch), -sin(pitch));
+			vec3 up = vec3(0.0, sin(pitch), cos(pitch));
+			vec3 dir = normalize(fw + vec3(ndc.x * uCam.w * th, 0.0, 0.0) + up * ndc.y * th);
+			vec3 C = vec3(0.0, 0.0, uCam.x);
+			vec3 sun = normalize(SUN);
 			float t = uTime;
-			vec3 sand = texture2D(uCol, uv).rgb;
-			vec4 nr = texture2D(uNrm, uv);
-			vec3 sn = vec3(nr.xy * 2.0 - 1.0, 0.0);
-			sn.z = sqrt(max(0.0, 1.0 - dot(sn.xy, sn.xy)));
+			vec3 haze = vec3(0.76, 0.83, 0.90);
 
-			vec3 V = vec3(0.0, 0.0, 1.0);
-			vec3 Ls = normalize(vec3(-0.3, -0.35, 0.89));
-			vec3 Hh = normalize(Ls + V);
-
-			float edge = edgeY(p.x, t);
-			float depth = edge - p.y;
-
-			// wet sand below the waterline's reach
-			float wetLine = uWater + 44.0 + (fbm(vec2(p.x * 0.01, 4.0)) - 0.5) * 26.0;
-			float wet = 1.0 - smoothstep(wetLine - 6.0, wetLine + 12.0, p.y);
-			vec3 col = mix(sand, sand * vec3(0.57, 0.59, 0.63), wet * 0.85);
-			col += vec3(1.0, 0.97, 0.9) * pow(max(dot(sn, Hh), 0.0), 40.0) * 0.22 * wet;
-			// a glassy film of water just behind the swash
-			float film = depth < 0.0 ? exp(depth / 14.0) : 0.0;
-			col = mix(col, vec3(0.60, 0.72, 0.84), film * 0.3);
-			col += vec3(1.0) * film * pow(max(dot(sn, Hh), 0.0), 120.0) * 0.6;
-
-			if (depth > -2.0) {
-				float d = max(depth, 0.0);
-				vec2 g = vec2(waveH(p + vec2(1.0, 0.0), t) - waveH(p, t), waveH(p + vec2(0.0, 1.0), t) - waveH(p, t));
-				vec3 wn = normalize(vec3(-g * 3.0 * smoothstep(0.0, 20.0, d), 1.0));
-
-				// look through the water at refracted, wet sand with caustics
-				vec2 off = vec2(wn.x, -wn.y) * 7.0 * uScale / uResDev * min(d / 20.0, 1.0);
-				vec3 bed = texture2D(uCol, uv + off).rgb * vec3(0.55, 0.58, 0.62);
-				float ca = caustic(p * 0.005 + wn.xy * 0.06, t * 0.6);
-				bed += vec3(0.85, 1.0, 1.0) * ca * 0.55 * (1.0 - smoothstep(10.0, 170.0, d)) * smoothstep(0.0, 8.0, d);
-
-				vec3 T = exp(-vec3(0.022, 0.0078, 0.0058) * d * 1.15);
-				vec3 deep = vec3(0.03, 0.19, 0.29);
-				vec3 w = bed * T + deep * (1.0 - T);
-				w += vec3(0.0, 0.05, 0.045) * smoothstep(0.0, 30.0, d) * (1.0 - smoothstep(30.0, 140.0, d));
-
-				// sky reflection and sun glitter
-				w = mix(w, vec3(0.62, 0.76, 0.90), clamp(0.05 + (1.0 - wn.z) * 2.0, 0.0, 0.4));
-				float nh = max(dot(wn, Hh), 0.0);
-				w += vec3(1.0, 0.97, 0.9) * (pow(nh, 1400.0) * 2.5 + pow(nh, 70.0) * 0.1);
-
-				// foam: lacy at the edge, plus lines of breaking waves further out
-				// rotated, multi-octave noise so the foam doesn't come out boxy
-				vec2 fp = mat2(0.8, -0.6, 0.6, 0.8) * p;
-				float fn = fbm(fp * vec2(0.035, 0.06) + vec2(t * 0.12, t * 0.35)) * 0.7 + fbm(fp * 0.15 - vec2(0.0, t * 0.4)) * 0.3;
-				float edgeFoam = smoothstep(18.0, 0.0, d) * smoothstep(0.42, 0.62, fn + smoothstep(7.0, 0.0, d) * 0.6);
-				float br = sin(d * 0.07 - t * 1.3 + vnoise(vec2(p.x * 0.01, t * 0.1)) * 2.0);
-				float line = smoothstep(0.75, 1.0, br) * smoothstep(0.45, 0.68, fn) * (1.0 - smoothstep(70.0, 170.0, d)) * smoothstep(12.0, 30.0, d);
-				float foam = clamp(edgeFoam + line * 0.75, 0.0, 1.0);
-				w = mix(w, vec3(0.93, 0.96, 0.97) * (0.9 + 0.1 * wn.z), foam * 0.92);
-
-				col = mix(col, w, smoothstep(-1.5, 1.5, depth));
+			if (dir.z >= -0.0005) {
+				gl_FragColor = vec4(sky(dir, true), 1.0);
+				return;
 			}
+
+			float tg = hitGround(C, dir);
+			vec3 G = C + dir * min(tg, 2e5);
+			// the waterline wobbles along the beach
+			float edgeN = (fbm3(vec2(G.x * 0.008, t * 0.22)) - 0.5) * 0.9;
+			float wl = uWl + edgeN;
+			float tw = (wl - C.z) / dir.z;
+			vec3 col;
+			float dist;
+
+			if (tg < tw) {
+				// ---- sand ----
+				dist = tg;
+				vec2 uv = regionUV(G.xy);
+				vec3 sand = texture2D(uCol, uv).rgb;
+				vec4 nr = texture2D(uNrm, uv);
+				vec3 sn = vec3(nr.xy * 2.0 - 1.0, 0.0);
+				sn.z = sqrt(max(0.0, 1.0 - dot(sn.xy, sn.xy)));
+				sand *= 1.0 + (hash12(floor(G.xy * 2.3)) - 0.5) * 0.12 * exp(-tg / 700.0);
+				float above = G.z - wl;
+				float wet = 1.0 - smoothstep(0.0, 0.9, G.z - (uWlHigh + edgeN));
+				col = mix(sand, sand * vec3(0.55, 0.57, 0.61), wet * 0.85);
+				vec3 wn = normalize(mix(vec3(0.0, 0.0, 1.0), sn, 0.6));
+				vec3 rd = reflect(dir, wn);
+				float fr = 0.02 + 0.98 * pow(1.0 - max(dot(-dir, wn), 0.0), 5.0);
+				float film = exp(-max(above, 0.0) / 0.25);
+				col = mix(col, sky(rd, false), clamp(fr * wet * 0.7 + film * 0.35, 0.0, 1.0));
+				col += vec3(1.0, 0.95, 0.85) * pow(max(dot(rd, sun), 0.0), 300.0) * (film * 2.5 + wet * 0.4);
+			} else {
+				// ---- sea ----
+				vec3 S = C + dir * tw;
+				dist = tw;
+				float lod = 1.0 / (1.0 + tw / 900.0);
+				float e = 1.0 + tw * 0.002;
+				vec2 gr = vec2(waveH(S.xy + vec2(e, 0.0), t, lod) - waveH(S.xy, t, lod),
+				               waveH(S.xy + vec2(0.0, e), t, lod) - waveH(S.xy, t, lod)) / e;
+				float depthV = wl - groundZ(S.xy);
+				vec3 n = normalize(vec3(-gr * 4.0 * smoothstep(0.0, 1.5, depthV), 1.0));
+
+				// look through the surface at the sea floor
+				vec3 rdir = refract(dir, n, 1.0 / 1.333);
+				float t2 = min(hitGround(S, rdir), 3000.0);
+				vec3 B = S + rdir * t2;
+				vec2 buv = regionUV(B.xy);
+				vec3 bed = texture2D(uCol, buv).rgb * vec3(0.62, 0.66, 0.60);
+				float ca = caustics(B.xy + n.xy * 25.0, t);
+				bed += vec3(0.80, 1.0, 0.95) * ca * 0.5 * exp(-depthV / 25.0) * smoothstep(0.0, 0.8, depthV) * exp(-tw / 2500.0);
+				vec3 T = exp(-vec3(0.0107, 0.0032, 0.0039) * t2 * 1.6);
+				vec3 scat = vec3(0.02, 0.17, 0.26);
+				vec3 w = bed * T + scat * (1.0 - T);
+
+				// reflection of the sky, stronger at grazing angles
+				float cosi = max(dot(-dir, n), 0.0);
+				float F = 0.02 + 0.98 * pow(1.0 - cosi, 5.0);
+				vec3 rd = reflect(dir, n);
+				rd.z = abs(rd.z);
+				w = mix(w, sky(rd, false) * 0.78, F);
+				float sp = max(dot(rd, sun), 0.0);
+				w += vec3(1.0, 0.95, 0.85) * (pow(sp, 1800.0) * 7.0 + pow(sp, 150.0) * 0.25);
+
+				// foam: lacy at the waterline, plus broken lines where waves spill
+				vec2 fp = mat2(0.8, -0.6, 0.6, 0.8) * S.xy;
+				float fn = fbm(fp * vec2(0.03, 0.05) + vec2(t * 0.1, t * 0.3)) * 0.7 + fbm3(fp * 0.13 - vec2(0.0, t * 0.4)) * 0.3;
+				float edgeFoam = smoothstep(1.2, 0.0, depthV) * smoothstep(0.42, 0.62, fn + smoothstep(0.35, 0.0, depthV) * 0.6);
+				float br = sin(S.y * 0.025 + t * 1.3 + vnoise(vec2(S.x * 0.006, t * 0.1)) * 2.0);
+				float line = smoothstep(0.75, 1.0, br) * smoothstep(0.45, 0.68, fn) * smoothstep(1.0, 3.0, depthV) * (1.0 - smoothstep(8.0, 20.0, depthV));
+				float foam = clamp(edgeFoam + line * 0.8, 0.0, 1.0) * lod;
+				w = mix(w, vec3(0.94, 0.96, 0.97) * (0.85 + 0.15 * max(dot(n, sun), 0.0)), foam * 0.92);
+				col = w;
+			}
+
+			// air between you and the far water
+			col = mix(col, haze, 1.0 - exp(-dist * 0.00011));
+			// gentle vignette
+			col *= 1.0 - 0.18 * dot(ndc * vec2(0.6, 0.8), ndc * vec2(0.6, 0.8));
 			gl_FragColor = vec4(col, 1.0);
 		}
 	</script>
@@ -656,26 +761,76 @@
 			}
 			return list[0];
 		}
+		function pot(n) { var p = 256; while (p < n && p < 2048) p *= 2; return p; }
 
-		// ---------- canvases ----------
+		// ---------- the scene: camera, beach plane, sun ----------
 		var glCanvas = document.getElementById("gl");
 		var canvas = document.getElementById("c");
 		var ctx = canvas.getContext("2d");
-		var W = 0, H = 0, DPR = 1, GLS = 1;
+		var W = 0, H = 0, DPR = 1, GLS = 1, glQuality = 1;
 		var TRAY = 80;
-		function shoreY() { return Math.max(80, Math.min(H * 0.22, 190)); }
+		var SLOPE = 0.04;
+		var SHORE_AT = 0.38; // shoreline height on screen, as a fraction from the top
+		var SUN = (function () { var s = [-0.66, 0.62, 0.42], l = Math.hypot(s[0], s[1], s[2]); return [s[0] / l, s[1] / l, s[2] / l]; })();
+		var cam = { h: 300, pitch: 0.3, tanHalf: 0.47, F: 800, cp: 1, sp: 0 };
+		var shoreY = 1300;
+		var region = { x0: -1000, y0: 200, w: 2000, h: 2000, tw: 2048, th: 2048 };
 
-		// things on the surface, in fractions of the screen so they survive resizes
-		var decorSeed = [];
-		for (var di = 0; di < 70; di++) {
-			decorSeed.push({ fx: rand(), fy: rand(), type: di < 26 ? "pebble" : di < 44 ? "shell" : "bit", s: rand(), rot: rr(0, 6.28), hue: rand() });
+		function groundZ(y) { return -SLOPE * (y - shoreY); }
+
+		function setupCamera() {
+			var portrait = W < H;
+			cam.tanHalf = Math.tan((portrait ? 30 : 24) * Math.PI / 180);
+			// horizon about 11% down from the top
+			cam.pitch = Math.atan(0.78 * cam.tanHalf);
+			cam.cp = Math.cos(cam.pitch);
+			cam.sp = Math.sin(cam.pitch);
+			cam.F = (H / 2) / cam.tanHalf;
+			cam.h = 200;
+			// shoreline a third of the way down the screen
+			var d = rayDir(W / 2, H * SHORE_AT);
+			shoreY = d[1] * (-cam.h / d[2]);
+			var near = rayDir(W / 2, H);
+			var yNear = near[1] * (-cam.h / near[2]) - 120;
+			var yFar = shoreY + 1100;
+			var xHalf = Math.min(2400, yFar * (W / 2) / cam.F * 1.08);
+			region.x0 = -xHalf;
+			region.w = 2 * xHalf;
+			region.y0 = yNear;
+			region.h = yFar - yNear;
+			region.th = 2048;
+			region.tw = pot(region.w / 0.9);
 		}
-		var prints = { fx: rr(0.25, 0.75), drift: rr(-0.35, 0.35), wob: rr(0, 6) };
+
+		function rayDir(sx, sy) {
+			var nx = (sx - W / 2) / cam.F, ny = (H / 2 - sy) / cam.F;
+			var dx = nx, dy = cam.cp + ny * cam.sp, dz = -cam.sp + ny * cam.cp;
+			var l = Math.hypot(dx, dy, dz);
+			return [dx / l, dy / l, dz / l];
+		}
+
+		// screen point -> spot on the sand
+		function unproject(sx, sy) {
+			var d = rayDir(sx, sy);
+			var den = SLOPE * d[1] + d[2];
+			if (den > -1e-5) return null;
+			var t = (SLOPE * shoreY - cam.h) / den;
+			return { x: d[0] * t, y: d[1] * t };
+		}
+
+		// world point -> screen, with how many CSS px one cm covers there
+		function project(x, y, z) {
+			var dz = z - cam.h;
+			var zc = y * cam.cp - dz * cam.sp;
+			if (zc < 10) return null;
+			var yc = y * cam.sp + dz * cam.cp;
+			return { x: W / 2 + x / zc * cam.F, y: H / 2 - yc / zc * cam.F, s: cam.F / zc };
+		}
 
 		// ---------- WebGL ----------
-		var gl = null, progSand = null, progFrame = null, quad = null;
+		var gl = null, progSand = null, progFrame = null;
 		var texCol = null, texNrm = null, fbCol = null, fbNrm = null, texDecor = null;
-		var sandDirty = true;
+		var sandDirty = true, dirtyRect = null;
 
 		function src(id) { return document.getElementById(id).textContent; }
 		function compile(type, source) {
@@ -699,10 +854,10 @@
 			if (!(name in p.u)) p.u[name] = gl.getUniformLocation(p, name);
 			return p.u[name];
 		}
-		function makeTex() {
+		function makeTex(mip) {
 			var t = gl.createTexture();
 			gl.bindTexture(gl.TEXTURE_2D, t);
-			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mip ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
 			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
 			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -710,7 +865,7 @@
 		}
 		function makeTarget(tex) {
 			gl.bindTexture(gl.TEXTURE_2D, tex);
-			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, glCanvas.width, glCanvas.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, region.tw, region.th, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
 			var fb = gl.createFramebuffer();
 			gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
 			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
@@ -720,18 +875,18 @@
 
 		function initGL() {
 			try {
-				gl = glCanvas.getContext("webgl", { antialias: false, alpha: false, preserveDrawingBuffer: false });
+				gl = glCanvas.getContext("webgl", { antialias: false, alpha: false });
 				if (!gl) return false;
 				progSand = program("fsSand");
 				progFrame = program("fsFrame");
-				quad = gl.createBuffer();
+				var quad = gl.createBuffer();
 				gl.bindBuffer(gl.ARRAY_BUFFER, quad);
 				gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
 				gl.enableVertexAttribArray(0);
 				gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-				texCol = makeTex();
-				texNrm = makeTex();
-				texDecor = makeTex();
+				texCol = makeTex(true);
+				texNrm = makeTex(true);
+				texDecor = makeTex(false);
 				return true;
 			} catch (e) {
 				console.error(e);
@@ -740,10 +895,10 @@
 			}
 		}
 
-		function commonUniforms(p) {
-			gl.uniform2f(u(p, "uResDev"), glCanvas.width, glCanvas.height);
-			gl.uniform1f(u(p, "uScale"), GLS);
-			gl.uniform1f(u(p, "uShore"), shoreY());
+		function sceneUniforms(p) {
+			gl.uniform1f(u(p, "uSlope"), SLOPE);
+			gl.uniform1f(u(p, "uShoreY"), shoreY);
+			gl.uniform4f(u(p, "uRegion"), region.x0, region.y0, region.w, region.h);
 		}
 
 		var holeBuf = new Float32Array(48 * 4), printBuf = new Float32Array(40 * 4), printN = 0;
@@ -751,12 +906,13 @@
 		function renderSand() {
 			if (!gl) return;
 			gl.useProgram(progSand);
-			commonUniforms(progSand);
+			sceneUniforms(progSand);
+			gl.uniform2f(u(progSand, "uTexSize"), region.tw, region.th);
 			var hs = holes.slice(-48);
 			holeBuf.fill(0);
 			hs.forEach(function (h, i) {
-				holeBuf[i * 4] = h.fx * W;
-				holeBuf[i * 4 + 1] = h.fy * H;
+				holeBuf[i * 4] = h.x;
+				holeBuf[i * 4 + 1] = h.y;
 				holeBuf[i * 4 + 2] = holeR(h);
 				holeBuf[i * 4 + 3] = h.depth * 0.55;
 			});
@@ -767,23 +923,56 @@
 			gl.activeTexture(gl.TEXTURE0);
 			gl.bindTexture(gl.TEXTURE_2D, texDecor);
 			gl.uniform1i(u(progSand, "uDecor"), 0);
-			gl.viewport(0, 0, glCanvas.width, glCanvas.height);
-			[[fbCol, 0], [fbNrm, 1]].forEach(function (pass) {
+			gl.viewport(0, 0, region.tw, region.th);
+			// after a dig only the patch around the hole needs redrawing
+			if (dirtyRect) {
+				gl.enable(gl.SCISSOR_TEST);
+				gl.scissor(dirtyRect[0], dirtyRect[1], dirtyRect[2], dirtyRect[3]);
+			}
+			[[fbCol, 0, texCol], [fbNrm, 1, texNrm]].forEach(function (pass) {
 				gl.bindFramebuffer(gl.FRAMEBUFFER, pass[0]);
 				gl.uniform1i(u(progSand, "uMode"), pass[1]);
 				gl.drawArrays(gl.TRIANGLES, 0, 3);
 			});
+			gl.disable(gl.SCISSOR_TEST);
 			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+			[texCol, texNrm].forEach(function (t) {
+				gl.bindTexture(gl.TEXTURE_2D, t);
+				gl.generateMipmap(gl.TEXTURE_2D);
+			});
 			sandDirty = false;
+			dirtyRect = null;
 		}
 
-		function renderFrame(t, water) {
+		function markHoleDirty(h) {
+			if (sandDirty && !dirtyRect) return; // a full redraw is already queued
+			var r = holeR(h) * 2.6;
+			var x0 = Math.floor((h.x - r - region.x0) / region.w * region.tw);
+			var y0 = Math.floor((h.y - r - region.y0) / region.h * region.th);
+			var x1 = Math.ceil((h.x + r - region.x0) / region.w * region.tw);
+			var y1 = Math.ceil((h.y + r - region.y0) / region.h * region.th);
+			if (dirtyRect) {
+				x0 = Math.min(x0, dirtyRect[0]);
+				y0 = Math.min(y0, dirtyRect[1]);
+				x1 = Math.max(x1, dirtyRect[0] + dirtyRect[2]);
+				y1 = Math.max(y1, dirtyRect[1] + dirtyRect[3]);
+			}
+			x0 = clamp(x0, 0, region.tw); x1 = clamp(x1, 0, region.tw);
+			y0 = clamp(y0, 0, region.th); y1 = clamp(y1, 0, region.th);
+			dirtyRect = [x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0)];
+			sandDirty = true;
+		}
+
+		function renderFrame(t) {
 			if (!gl) return;
 			if (sandDirty) renderSand();
 			gl.useProgram(progFrame);
-			commonUniforms(progFrame);
+			sceneUniforms(progFrame);
+			gl.uniform2f(u(progFrame, "uResDev"), glCanvas.width, glCanvas.height);
+			gl.uniform4f(u(progFrame, "uCam"), cam.h, cam.pitch, cam.tanHalf, W / H);
 			gl.uniform1f(u(progFrame, "uTime"), t);
-			gl.uniform1f(u(progFrame, "uWater"), water);
+			gl.uniform1f(u(progFrame, "uWl"), waterNow);
+			gl.uniform1f(u(progFrame, "uWlHigh"), waterHigh);
 			gl.activeTexture(gl.TEXTURE0);
 			gl.bindTexture(gl.TEXTURE_2D, texCol);
 			gl.uniform1i(u(progFrame, "uCol"), 0);
@@ -795,27 +984,37 @@
 		}
 
 		// pebbles and shells lying on the surface, painted in 2D and baked into the sand
+		var decorSeed = [];
+		for (var di = 0; di < 90; di++) {
+			decorSeed.push({ fx: rand(), fy: rand(), type: di < 34 ? "pebble" : di < 56 ? "shell" : "bit", s: rand(), rot: rr(0, 6.28), hue: rand() });
+		}
+		var prints = { fx: rr(-0.3, 0.3), drift: rr(-0.3, 0.3), wob: rr(0, 6) };
+
 		function buildDecor() {
 			var dc = document.createElement("canvas");
-			dc.width = glCanvas.width;
-			dc.height = glCanvas.height;
+			dc.width = region.tw;
+			dc.height = region.th;
 			var c = dc.getContext("2d");
-			c.setTransform(GLS, 0, 0, GLS, 0, 0);
-			var top = shoreY() - 40;
+			var sx = region.tw / region.w, sy = region.th / region.h;
+			// draw in world cm; y flips because canvas rows run downward
+			c.setTransform(sx, 0, 0, -sy, -region.x0 * sx, region.th + region.y0 * sy);
+			var yTop = Math.min(shoreY + 300, region.y0 + region.h);
+			var xSpan = Math.min(region.w, 2200);
 			decorSeed.forEach(function (d) {
-				var x = d.fx * W, y = top + d.fy * (H - top);
+				var y = region.y0 + 60 + d.fy * (yTop - region.y0 - 60);
+				var x = (d.fx - 0.5) * xSpan * (0.35 + 0.65 * (y - region.y0) / (yTop - region.y0));
 				c.save();
 				c.translate(x, y);
 				c.rotate(d.rot);
 				c.shadowColor = "rgba(40,25,10,0.45)";
-				c.shadowBlur = 2.5 * GLS;
-				c.shadowOffsetX = 1.6 * GLS;
-				c.shadowOffsetY = 1.8 * GLS;
+				c.shadowBlur = 2.5 * sx;
+				c.shadowOffsetX = 2 * sx;
+				c.shadowOffsetY = 2.6 * sy;
 				if (d.type === "pebble") {
 					var r = 2.5 + d.s * 5;
 					var tones = [[150, 140, 130], [120, 105, 90], [175, 165, 150], [95, 90, 88], [190, 150, 120]];
 					var tc = tones[Math.floor(d.hue * tones.length)];
-					var g = c.createRadialGradient(-r * 0.35, -r * 0.4, r * 0.1, 0, 0, r * 1.3);
+					var g = c.createRadialGradient(-r * 0.3, r * 0.4, r * 0.1, 0, 0, r * 1.3);
 					g.addColorStop(0, "rgb(" + (tc[0] + 50) + "," + (tc[1] + 50) + "," + (tc[2] + 50) + ")");
 					g.addColorStop(1, "rgb(" + (tc[0] - 40) + "," + (tc[1] - 40) + "," + (tc[2] - 40) + ")");
 					c.fillStyle = g;
@@ -858,56 +1057,73 @@
 			gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
 		}
 
+		// someone walked down to the water before you got here
 		function buildPrints() {
 			printN = 0;
 			printBuf.fill(0);
-			var x = prints.fx * W, y = H - TRAY + 20, step = 25;
-			for (var i = 0; i < 40 && y > shoreY() - 30; i++) {
-				var dx = prints.drift + Math.sin(i * 0.25 + prints.wob) * 0.35;
+			var start = unproject(W / 2, H - TRAY + 30) || { x: 0, y: region.y0 + 150 };
+			var x = start.x + prints.fx * region.w * 0.25, y = start.y, step = 34;
+			for (var i = 0; i < 40 && y < shoreY + 40; i++) {
+				var dx = prints.drift + Math.sin(i * 0.25 + prints.wob) * 0.3;
 				var len = Math.hypot(dx, 1);
-				var dirx = dx / len, diry = -1 / len;
+				var dirx = dx / len, diry = 1 / len;
 				var side = i % 2 ? 1 : -1;
-				var px = x + -diry * side * 7, py = y + dirx * side * 7;
-				printBuf[i * 4] = px;
-				printBuf[i * 4 + 1] = py;
-				printBuf[i * 4 + 2] = Math.atan2(dirx, -diry) + side * 0.08;
+				printBuf[i * 4] = x + diry * side * 9;
+				printBuf[i * 4 + 1] = y - dirx * side * 9;
+				printBuf[i * 4 + 2] = Math.atan2(dirx, diry) + side * 0.08;
 				printN++;
 				x += dirx * step;
 				y += diry * step;
 			}
 		}
 
+		function sizeGL() {
+			GLS = Math.min(window.devicePixelRatio || 1, 1.5) * glQuality;
+			glCanvas.width = Math.max(1, Math.round(W * GLS));
+			glCanvas.height = Math.max(1, Math.round(H * GLS));
+		}
+
 		function resize() {
 			DPR = Math.min(window.devicePixelRatio || 1, 2);
-			GLS = Math.min(window.devicePixelRatio || 1, 1.5);
 			W = window.innerWidth;
 			H = window.innerHeight;
 			canvas.width = Math.round(W * DPR);
 			canvas.height = Math.round(H * DPR);
-			glCanvas.width = Math.round(W * GLS);
-			glCanvas.height = Math.round(H * GLS);
+			setupCamera();
+			sizeGL();
 			if (gl) {
 				fbCol = makeTarget(texCol);
 				fbNrm = makeTarget(texNrm);
 				buildDecor();
 				buildPrints();
 				sandDirty = true;
+				dirtyRect = null;
 			}
+			// keep every metal signal somewhere you can reach it
+			things.forEach(function (b) {
+				if (b.found || b.cat !== "metal") return;
+				var p = project(b.x, b.y, groundZ(b.y));
+				if (!p || p.x < 20 || p.x > W - 20 || p.y > H - TRAY - 20 || b.y > shoreY - 80) {
+					var s = spot(80, "metal");
+					b.x = s.x;
+					b.y = s.y;
+				}
+			});
 		}
 
 		// ---------- game state ----------
-		var things = [];   // { cat, kind, fx, fy, depth, found }
-		var holes = [];    // { fx, fy, depth }
+		var things = [];   // { cat, kind, x, y, depth, found }  (world cm)
+		var holes = [];    // { x, y, depth }
 		var particles = [];
 		var risers = [];
 		var runners = [];
-		var coil = { x: -999, y: -999, visible: false };
+		var coil = { x: 0, y: 0, visible: false };
 		var tide = null;
 		var busy = false;
 		var cardQueue = [];
 		var signal = { s: 0, target: null, dist: 0 };
 
-		function holeR(h) { return 12 + h.depth * 0.35; }
+		function holeR(h) { return 10 + h.depth * 0.3; }
 
 		var finds = {};
 		try { finds = JSON.parse(localStorage.getItem("wwo-01-reveal-finds") || "{}") || {}; } catch (e) { finds = {}; }
@@ -915,14 +1131,16 @@
 			try { localStorage.setItem("wwo-01-reveal-finds", JSON.stringify(finds)); } catch (e) {}
 		}
 
+		// a random dry spot that's on screen
 		function spot(minGap, cat) {
-			var top = shoreY() + 70, bottom = H - TRAY - 30;
-			for (var tries = 0; tries < 200; tries++) {
-				var x = rr(30, W - 30), y = rr(top, bottom);
-				var crowded = things.some(function (b) { return b.cat === cat && Math.hypot(b.fx * W - x, b.fy * H - y) < minGap; });
-				if (!crowded || tries > 150) return { fx: x / W, fy: y / H };
+			var shoreSy = H * SHORE_AT;
+			for (var tries = 0; tries < 300; tries++) {
+				var p = unproject(rr(30, W - 30), rr(shoreSy + 40, H - TRAY - 40));
+				if (!p || p.y > shoreY - 90) continue;
+				var crowded = things.some(function (b) { return b.cat === cat && Math.hypot(b.x - p.x, b.y - p.y) < minGap; });
+				if (!crowded || tries > 220) return p;
 			}
-			return { fx: 0.5, fy: 0.6 };
+			return unproject(W / 2, H * 0.7) || { x: 0, y: shoreY - 300 };
 		}
 
 		function bury() {
@@ -930,19 +1148,19 @@
 			var i, k, s, dr;
 			for (i = 0; i < N_METAL; i++) {
 				k = weighted(METAL, function (m) { return WEIGHT[m.tier]; });
-				s = spot(110, "metal");
+				s = spot(90, "metal");
 				dr = DEPTHS[k.tier];
-				things.push({ cat: "metal", kind: k, fx: s.fx, fy: s.fy, depth: Math.round(rr(dr[0], dr[1])), found: false });
+				things.push({ cat: "metal", kind: k, x: s.x, y: s.y, depth: Math.round(rr(dr[0], dr[1])), found: false });
 			}
 			for (i = 0; i < N_OTHER; i++) {
 				k = weighted(OTHER, function (m) { return WEIGHT[m.tier]; });
-				s = spot(70, "other");
-				things.push({ cat: "other", kind: k, fx: s.fx, fy: s.fy, depth: Math.round(rr(3, 28)), found: false });
+				s = spot(55, "other");
+				things.push({ cat: "other", kind: k, x: s.x, y: s.y, depth: Math.round(rr(3, 28)), found: false });
 			}
 			for (i = 0; i < N_CRITTER; i++) {
 				k = weighted(CRITTERS, function (m) { return m.weight; });
-				s = spot(70, "critter");
-				things.push({ cat: "critter", kind: k, fx: s.fx, fy: s.fy, depth: Math.round(rr(2, 8)), found: false });
+				s = spot(55, "critter");
+				things.push({ cat: "critter", kind: k, x: s.x, y: s.y, depth: Math.round(rr(2, 8)), found: false });
 			}
 			updateLeft();
 		}
@@ -971,18 +1189,11 @@
 			lp.type = "lowpass";
 			lp.frequency.value = 700;
 			surfGain = AC.createGain();
-			surfGain.gain.value = 0.25;
-			var lfo = AC.createOscillator();
-			lfo.frequency.value = 0.08;
-			var lfoAmt = AC.createGain();
-			lfoAmt.gain.value = 0.14;
-			lfo.connect(lfoAmt);
-			lfoAmt.connect(surfGain.gain);
+			surfGain.gain.value = 0.2;
 			srcNode.connect(lp);
 			lp.connect(surfGain);
 			surfGain.connect(master);
 			srcNode.start();
-			lfo.start();
 		}
 
 		function tone(freq, dur, type, vol, when) {
@@ -1040,8 +1251,27 @@
 			notes.forEach(function (f, i) { tone(f, 0.22, "triangle", 0.11, 0.3 + i * 0.09); });
 		}
 
+		// ---------- the sea: swash running up the beach and draining back ----------
+		var SWASH_T = 7;
+		function swash(t) {
+			var s = (t / SWASH_T) % 1;
+			return s < 0.3 ? Math.sin(s / 0.3 * Math.PI / 2) : Math.cos((s - 0.3) / 0.7 * Math.PI / 2);
+		}
+		var waterNow = 0, waterHigh = 0;
+		function updateWater(t, now) {
+			var tideZ = tideOffset(now);
+			var sw = swash(t);
+			waterNow = tideZ - 0.6 + 1.5 * sw;
+			waterHigh = tideZ + 1.6;
+			if (surfGain && AC) {
+				// the surf gets louder as each wave runs up
+				var s = (t / SWASH_T) % 1;
+				surfGain.gain.setTargetAtTime(0.14 + 0.22 * Math.max(0, Math.sin(s * Math.PI * 1.4)) + (tide ? 0.3 : 0), AC.currentTime, 0.3);
+			}
+		}
+
 		// ---------- detector ----------
-		var DETECT_R = 140, REVEAL_METAL = 30, REVEAL_OTHER = 40;
+		var DETECT_R = 120, REVEAL_METAL = 26, REVEAL_OTHER = 36, COIL_R = 16;
 		var nextBeep = 0, beepFlash = 0;
 
 		function vdiKind(v) {
@@ -1054,11 +1284,10 @@
 			return "!!!";
 		}
 
-		// how deep the hole already is at a spot, so the reading counts only the sand that's left
 		function holeDepthAt(x, y) {
 			var best = 0;
 			holes.forEach(function (h) {
-				if (Math.hypot(h.fx * W - x, h.fy * H - y) < holeR(h) + 6) best = Math.max(best, h.depth);
+				if (Math.hypot(h.x - x, h.y - y) < holeR(h) + 5) best = Math.max(best, h.depth);
 			});
 			return best;
 		}
@@ -1068,9 +1297,9 @@
 			if (coil.visible && !tide) {
 				things.forEach(function (b) {
 					if (b.found || b.cat !== "metal") return;
-					var d = Math.hypot(b.fx * W - coil.x, b.fy * H - coil.y);
+					var d = Math.hypot(b.x - coil.x, b.y - coil.y);
 					if (d > DETECT_R) return;
-					var left = Math.max(0, b.depth - holeDepthAt(b.fx * W, b.fy * H));
+					var left = Math.max(0, b.depth - holeDepthAt(b.x, b.y));
 					var s = (1 - d / DETECT_R) * (1 - left / 70);
 					if (s > best) { best = s; target = b; bestD = d; }
 				});
@@ -1103,7 +1332,7 @@
 			lcdId.textContent = showId ? (id < 10 ? "0" + id : id) : "--";
 			lcdKind.textContent = showId ? vdiKind(tg.kind.vdi) : "";
 			if (showId && signal.dist < REVEAL_METAL) {
-				depthEl.textContent = "DIG ~" + Math.max(2, Math.round((tg.depth - holeDepthAt(tg.fx * W, tg.fy * H)) / 2 + rand() * 2) * 2) + "cm";
+				depthEl.textContent = "DIG ~" + Math.max(2, Math.round((tg.depth - holeDepthAt(tg.x, tg.y)) / 2 + rand() * 2) * 2) + "cm";
 				depthEl.className = "lbl hot";
 			} else {
 				depthEl.textContent = "";
@@ -1125,23 +1354,16 @@
 		}
 
 		// ---------- digging ----------
-		function edgeAt(x, t) {
-			// the shader's waterline, plus the most its noise can push it
-			return waterNow + 6 * Math.sin(x * 0.011 + t * 0.9) + 4 * Math.sin(x * 0.027 - t * 1.4) + 18 * Math.sin(t * 0.5) + 12;
-		}
-
 		function dig(x, y) {
-			if (busy || tide || !started) return;
-			if (y < edgeAt(x, clock) + 6) {
-				toast("That's the ocean. You can't dig the ocean.");
+			if (busy || tide || !started || !coil.visible) return;
+			if (groundZ(y) < waterHigh + 0.6) {
+				toast("That's the sea. You can't dig the sea.");
 				return;
 			}
-			if (y > H - TRAY - 6) return;
 
-			// dig into an existing hole if you're over one, otherwise start a new one
 			var hole = null, hd = Infinity;
 			holes.forEach(function (h) {
-				var d = Math.hypot(h.fx * W - x, h.fy * H - y);
+				var d = Math.hypot(h.x - x, h.y - y);
 				if (d < holeR(h) && d < hd) { hole = h; hd = d; }
 			});
 			if (hole && hole.depth >= MAX_HOLE) {
@@ -1149,24 +1371,24 @@
 				return;
 			}
 			if (!hole) {
-				hole = { fx: x / W, fy: y / H, depth: 0 };
+				hole = { x: x, y: y, depth: 0 };
 				holes.push(hole);
-				if (holes.length > 48) holes.shift();
+				if (holes.length > 48) { holes.shift(); sandDirty = true; dirtyRect = null; }
 			}
 			hole.depth = Math.min(MAX_HOLE, hole.depth + DIG_STEP);
-			sandDirty = true;
+			markHoleDirty(hole);
 
-			var hx = hole.fx * W, hy = hole.fy * H;
-			for (var i = 0; i < 30; i++) {
-				var a = rr(-0.9, 1.4), sp = rr(60, 190);
-				particles.push({ x: hx, y: hy, z: 0, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * 0.5, vz: rr(90, 240), life: 1, c: rand() < 0.5 ? "#c9ab78" : rand() < 0.5 ? "#a88a5a" : "#e0c999", s: rr(1.5, 3.2) });
+			var gz = groundZ(hole.y);
+			for (var i = 0; i < 34; i++) {
+				var a = rr(-1.6, 0.4), sp = rr(50, 170);
+				particles.push({ x: hole.x, y: hole.y, z: gz, gz: gz, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * 0.7, vz: rr(90, 240), life: 1, c: rand() < 0.5 ? "#c9ab78" : rand() < 0.5 ? "#a88a5a" : "#e0c999", s: rr(0.8, 1.8) });
 			}
 			digSound(hole.depth);
 
 			var found = [], deeperMetal = false;
 			things.forEach(function (b) {
 				if (b.found) return;
-				var d = Math.hypot(b.fx * W - hx, b.fy * H - hy);
+				var d = Math.hypot(b.x - hole.x, b.y - hole.y);
 				var reach = b.cat === "metal" ? REVEAL_METAL : REVEAL_OTHER;
 				if (d > Math.max(reach, holeR(hole) + 4)) return;
 				if (b.depth <= hole.depth) found.push(b);
@@ -1185,12 +1407,12 @@
 				var isNew = !finds[b.kind.id];
 				finds[b.kind.id] = (finds[b.kind.id] || 0) + 1;
 				if (b.cat === "critter") {
-					runners.push(makeRunner(b.kind, hx, hy));
+					runners.push(makeRunner(b.kind, hole.x, hole.y));
 					toast(b.kind.toast);
 					findJingle("critter");
 					renderTray(b.kind.id);
 				} else {
-					cardQueue.push({ kind: b.kind, isNew: isNew, depth: b.depth, cat: b.cat, x: hx, y: hy });
+					cardQueue.push({ kind: b.kind, isNew: isNew, depth: b.depth, x: hole.x, y: hole.y, hd: hole.depth });
 				}
 			});
 			saveFinds();
@@ -1201,7 +1423,7 @@
 			var c = cardQueue.shift();
 			if (!c) return;
 			busy = true;
-			risers.push({ kind: c.kind, x: c.x, y: c.y, t: 0 });
+			risers.push({ kind: c.kind, x: c.x, y: c.y, hd: c.hd, t: 0 });
 			findJingle(c.kind.tier);
 			setTimeout(function () { showCard(c.kind, c.isNew, true, c.depth); }, 850);
 		}
@@ -1209,68 +1431,80 @@
 		// ---------- critters running away ----------
 		function makeRunner(kind, x, y) {
 			var dir = rand() < 0.5 ? -1 : 1;
-			return { kind: kind, x: x, y: y, t: 0, dir: dir, ang: rr(-0.6, 0.6) + (dir < 0 ? Math.PI : 0), alpha: 1, scale: 1 };
+			return { kind: kind, x: x, y: y, z: 0, t: 0, dir: dir, ang: rr(-0.6, 0.6) + (dir < 0 ? Math.PI : 0), alpha: 1, scale: 1 };
 		}
 
-		function drawRunners(dt, now) {
+		function drawEmoji(e, x, y, z, sizeCm, rot, scale, alpha, lift) {
+			var gz = groundZ(y);
+			var p = project(x, y, gz + z);
+			if (!p) return;
+			var px = sizeCm * p.s * scale;
+			if (px < 2) return;
+			// shadow cast along the sun onto the sand
+			var sh = project(x + SUN[0] * -z / SUN[2], y + SUN[1] * -z / SUN[2], gz);
+			ctx.save();
+			ctx.globalAlpha = alpha * 0.35;
+			if (sh) {
+				ctx.fillStyle = "#2a1a08";
+				ctx.filter = "blur(" + Math.max(1, px * 0.08) + "px)";
+				ctx.beginPath();
+				ctx.ellipse(sh.x + px * 0.12, sh.y + px * 0.05, px * 0.42, px * 0.16, 0, 0, Math.PI * 2);
+				ctx.fill();
+				ctx.filter = "none";
+			}
+			ctx.globalAlpha = alpha;
+			ctx.translate(p.x, p.y - px * 0.45 - (lift || 0));
+			ctx.rotate(rot || 0);
+			ctx.font = Math.round(px) + "px serif";
+			ctx.textAlign = "center";
+			ctx.textBaseline = "middle";
+			ctx.fillText(e, 0, 0);
+			ctx.restore();
+		}
+
+		function drawRunners(dt) {
+			runners.sort(function (a, b) { return b.y - a.y; });
 			runners = runners.filter(function (r) {
 				r.t += dt;
-				var m = r.kind.move, size = 26, rot = 0, bob = 0;
+				var m = r.kind.move, rot = 0;
+				r.z = 0;
 				if (m === "scuttle") {
-					r.x += r.dir * 190 * dt;
-					r.y += Math.sin(r.t * 3) * 20 * dt;
-					bob = Math.sin(r.t * 40) * 1.5;
+					r.x += r.dir * 130 * dt;
+					r.y += Math.sin(r.t * 3) * 15 * dt;
+					r.z = Math.abs(Math.sin(r.t * 40)) * 0.8;
 				} else if (m === "hop") {
-					r.x += Math.cos(r.ang) * 150 * dt;
-					r.y += Math.sin(r.ang) * 60 * dt;
-					bob = -Math.abs(Math.sin(r.t * 9)) * 18;
+					r.x += Math.cos(r.ang) * 110 * dt;
+					r.y += Math.sin(r.ang) * 50 * dt;
+					r.z = Math.abs(Math.sin(r.t * 9)) * 14;
 					rot = Math.sin(r.t * 9) * 0.4;
 				} else if (m === "burrow") {
 					rot = Math.sin(r.t * 14) * 0.5;
 					if (r.t > 0.9) r.scale = Math.max(0, 1 - (r.t - 0.9) / 0.8);
 				} else if (m === "sea") {
-					var target = edgeAt(r.x, clock) - 20;
-					r.y -= (r.kind.id === "turtle" ? 45 : 90) * dt;
-					rot = r.kind.id === "turtle" ? Math.PI / 2 + Math.sin(r.t * 7) * 0.15 : Math.sin(r.t * 5) * 0.2;
+					r.y += (r.kind.id === "turtle" ? 40 : 75) * dt;
+					rot = Math.sin(r.t * 7) * 0.15;
 					r.scale = r.kind.id === "octopus" ? 1 + Math.sin(r.t * 6) * 0.08 : 1;
-					if (r.y < target + 30) r.alpha = Math.max(0, r.alpha - dt * 1.5);
 				}
-				ctx.save();
-				ctx.globalAlpha = r.alpha;
-				ctx.translate(r.x, r.y + bob);
-				ctx.rotate(rot);
-				ctx.scale(r.scale, r.scale);
-				ctx.shadowColor = "rgba(40,25,10,0.45)";
-				ctx.shadowBlur = 4;
-				ctx.shadowOffsetX = 3;
-				ctx.shadowOffsetY = 4 - bob * 0.5;
-				ctx.font = size + "px serif";
-				ctx.textAlign = "center";
-				ctx.textBaseline = "middle";
-				ctx.fillText(r.kind.e, 0, 0);
-				ctx.restore();
-				return r.alpha > 0 && r.scale > 0 && r.x > -40 && r.x < W + 40 && r.y > -40 && r.t < 12;
+				// anything the water reaches fades into it
+				if (groundZ(r.y) < waterNow + 0.5) r.alpha = Math.max(0, r.alpha - dt * 1.5);
+				drawEmoji(r.kind.e, r.x, r.y, r.z, 20, rot, r.scale, r.alpha);
+				var p = project(r.x, r.y, 0);
+				return r.alpha > 0 && r.scale > 0 && p && p.x > -60 && p.x < W + 60 && r.t < 14;
 			});
 		}
 
 		// ---------- tide ----------
-		var TIDE_IN = 2600, TIDE_HOLD = 600, TIDE_OUT = 2800;
+		var TIDE_IN = 2800, TIDE_HOLD = 700, TIDE_OUT = 3000;
 		function startTide() {
 			if (tide || busy) return;
 			tide = { start: performance.now(), swapped: false };
-			if (surfGain && AC) {
-				var t0 = AC.currentTime;
-				surfGain.gain.cancelScheduledValues(t0);
-				surfGain.gain.setValueAtTime(surfGain.gain.value, t0);
-				surfGain.gain.linearRampToValueAtTime(0.7, t0 + 2.6);
-				surfGain.gain.linearRampToValueAtTime(0.25, t0 + 6);
-			}
 		}
 
 		function tideOffset(now) {
 			if (!tide) return 0;
 			var t = now - tide.start;
-			var full = H - shoreY() + 80;
+			var nearY = unproject(W / 2, H) || { y: region.y0 };
+			var full = SLOPE * (shoreY - nearY.y) + 4;
 			if (t < TIDE_IN) {
 				var a = t / TIDE_IN;
 				return full * (a * a * (3 - 2 * a));
@@ -1281,6 +1515,7 @@
 					holes = [];
 					runners = [];
 					sandDirty = true;
+					dirtyRect = null;
 					bury();
 				}
 				return full;
@@ -1297,18 +1532,17 @@
 		// ---------- overlay drawing ----------
 		function drawParticles(dt) {
 			particles = particles.filter(function (p) {
-				p.vz -= 650 * dt;
+				p.vz -= 900 * dt;
 				p.x += p.vx * dt;
 				p.y += p.vy * dt;
 				p.z += p.vz * dt;
-				if (p.z <= 0) { p.z = 0; p.vx *= 0.4; p.vy *= 0.4; p.vz = 0; p.life -= dt * 2.5; }
+				if (p.z <= p.gz) { p.z = p.gz; p.vx *= 0.4; p.vy *= 0.4; p.vz = 0; p.life -= dt * 2.5; }
+				var q = project(p.x, p.y, p.z);
+				if (!q) return false;
+				var sz = Math.max(1, p.s * q.s);
 				ctx.globalAlpha = clamp(p.life, 0, 1);
-				if (p.z > 0) {
-					ctx.fillStyle = "rgba(50,30,10,0.18)";
-					ctx.fillRect(p.x + p.z * 0.25, p.y + p.z * 0.2, p.s, p.s);
-				}
 				ctx.fillStyle = p.c;
-				ctx.fillRect(p.x - p.s / 2, p.y - p.z - p.s / 2, p.s, p.s);
+				ctx.fillRect(q.x - sz / 2, q.y - sz / 2, sz, sz);
 				return p.life > 0;
 			});
 			ctx.globalAlpha = 1;
@@ -1319,117 +1553,193 @@
 				r.t += dt;
 				var a = Math.min(1, r.t / 0.7);
 				var ease = 1 - Math.pow(1 - a, 3);
-				var y = r.y - 30 * ease;
+				var z = -r.hd * 0.55 + ease * (r.hd * 0.55 + 22);
 				if (r.kind.tier === "rare" || r.kind.tier === "legendary") {
-					var g = ctx.createRadialGradient(r.x, y, 0, r.x, y, 50);
-					g.addColorStop(0, r.kind.tier === "legendary" ? "rgba(255,170,230,0.6)" : "rgba(255,240,170,0.55)");
-					g.addColorStop(1, "rgba(255,240,170,0)");
-					ctx.fillStyle = g;
-					ctx.beginPath();
-					ctx.arc(r.x, y, 50 * ease, 0, Math.PI * 2);
-					ctx.fill();
+					var p = project(r.x, r.y, groundZ(r.y) + z);
+					if (p) {
+						var rad = 40 * p.s * ease;
+						var g = ctx.createRadialGradient(p.x, p.y - 10 * p.s, 0, p.x, p.y - 10 * p.s, rad + 1);
+						g.addColorStop(0, r.kind.tier === "legendary" ? "rgba(255,170,230,0.6)" : "rgba(255,240,170,0.55)");
+						g.addColorStop(1, "rgba(255,240,170,0)");
+						ctx.fillStyle = g;
+						ctx.beginPath();
+						ctx.arc(p.x, p.y - 10 * p.s, rad + 1, 0, Math.PI * 2);
+						ctx.fill();
+					}
 				}
-				ctx.save();
-				ctx.shadowColor = "rgba(40,25,10,0.5)";
-				ctx.shadowBlur = 6;
-				ctx.shadowOffsetX = 4 + 10 * ease;
-				ctx.shadowOffsetY = 5 + 14 * ease;
-				ctx.font = Math.round(18 + 24 * ease) + "px serif";
-				ctx.textAlign = "center";
-				ctx.textBaseline = "middle";
-				ctx.fillText(r.kind.e, r.x, y + Math.sin(now / 220) * 2 * ease);
-				ctx.restore();
+				drawEmoji(r.kind.e, r.x, r.y, Math.max(0, z), 12 + 12 * ease, Math.sin(now / 300) * 0.08 * ease, 1, Math.min(1, r.t * 4));
 				return busy;
 			});
 		}
 
+		function ringPath(cx, cy, cz, rx, ry) {
+			var pts = [];
+			for (var i = 0; i <= 32; i++) {
+				var a = i / 32 * Math.PI * 2;
+				var p = project(cx + Math.cos(a) * rx, cy + Math.sin(a) * ry, cz);
+				if (!p) return null;
+				pts.push(p);
+			}
+			return pts;
+		}
+		function strokePts(pts) {
+			ctx.beginPath();
+			pts.forEach(function (p, i) { i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+		}
+
 		function drawCoil() {
 			if (!coil.visible || busy || tide) return;
-			var x = coil.x, y = coil.y, s = signal.s;
-			// soft shadow, offset like the sun's
-			ctx.save();
-			ctx.filter = "blur(3px)";
-			ctx.fillStyle = "rgba(40,25,10,0.28)";
-			ctx.beginPath();
-			ctx.ellipse(x + 16, y + 18, 27, 20, 0, 0, Math.PI * 2);
-			ctx.lineWidth = 7;
-			ctx.strokeStyle = "rgba(40,25,10,0.28)";
-			ctx.stroke();
-			ctx.beginPath();
-			ctx.moveTo(x + 40, y + 44);
-			ctx.lineTo(x + 118, y + 140);
-			ctx.lineWidth = 6;
-			ctx.stroke();
-			ctx.restore();
+			var x = coil.x, y = coil.y, gz = groundZ(y), s = signal.s;
+			var hover = 4;
+			var c0 = project(x, y, gz + hover);
+			if (!c0) return;
+			// detector geometry in cm: coil, then the shaft rising back toward you
+			var a = [x + 3, y - COIL_R * 0.7, gz + hover + 2];
+			// the shaft points back toward you, the person holding it
+			var toward = unproject(W * 0.62, H) || { x: 0, y: y - 300 };
+			var vx = toward.x - x, vy = toward.y - y, vl = Math.hypot(vx, vy) || 1;
+			var b = [x + vx / vl * 130, y + vy / vl * 130, gz + 75];
+			var box = [a[0] + (b[0] - a[0]) * 0.55, a[1] + (b[1] - a[1]) * 0.55, a[2] + (b[2] - a[2]) * 0.55];
+			var grip = [a[0] + (b[0] - a[0]) * 0.75, a[1] + (b[1] - a[1]) * 0.75, a[2] + (b[2] - a[2]) * 0.75];
+			function onGround(p) { var k = (p[2] - gz) / SUN[2]; return [p[0] - SUN[0] * k, p[1] - SUN[1] * k, gz]; }
 
-			// shaft: brushed aluminium
+			// shadow along the sun
 			ctx.save();
-			ctx.translate(x + 14, y + 10);
-			var ang = Math.atan2(94, 72);
-			ctx.rotate(ang);
-			var sg = ctx.createLinearGradient(0, -3, 0, 3);
-			sg.addColorStop(0, "#f2f2f2");
-			sg.addColorStop(0.45, "#a9adb2");
-			sg.addColorStop(1, "#5b6066");
-			ctx.fillStyle = sg;
-			ctx.fillRect(0, -3, 120, 6);
-			// control box
-			var bg = ctx.createLinearGradient(0, -9, 0, 9);
-			bg.addColorStop(0, "#4a4f55");
-			bg.addColorStop(1, "#1d2024");
-			ctx.fillStyle = bg;
-			ctx.fillRect(52, -9, 26, 18);
-			ctx.fillStyle = beepFlash > 0.3 ? "#b8f5a0" : "#2c3a2e";
-			ctx.fillRect(57, -5, 16, 10);
-			// grip
-			var gg = ctx.createLinearGradient(0, -5, 0, 5);
-			gg.addColorStop(0, "#3a3a3a");
-			gg.addColorStop(1, "#0d0d0d");
-			ctx.fillStyle = gg;
-			ctx.fillRect(86, -5, 34, 10);
-			ctx.restore();
-
-			// glow on a hit
-			if (s > 0) {
-				ctx.strokeStyle = "rgba(184,245,160," + (0.2 + 0.6 * s * beepFlash) + ")";
-				ctx.lineWidth = 6 + 10 * beepFlash * s;
+			ctx.filter = "blur(" + Math.max(1.5, 2 * c0.s) + "px)";
+			ctx.strokeStyle = "rgba(40,25,10,0.32)";
+			var sa = onGround([x, y, gz + hover]);
+			var sring = ringPath(sa[0], sa[1], gz, COIL_R, COIL_R);
+			if (sring) { ctx.lineWidth = 3.2 * c0.s; strokePts(sring); ctx.stroke(); }
+			var p1 = onGround(a), p2 = onGround(b);
+			var q1 = project(p1[0], p1[1], gz), q2 = project(p2[0], p2[1], gz);
+			if (q1 && q2) {
+				ctx.lineWidth = 2.6 * c0.s;
 				ctx.beginPath();
-				ctx.ellipse(x, y, 26, 20, 0, 0, Math.PI * 2);
+				ctx.moveTo(q1.x, q1.y);
+				ctx.lineTo(q2.x, q2.y);
 				ctx.stroke();
 			}
-			// coil: black plastic ring with a highlight
-			ctx.lineWidth = 6;
-			var cg = ctx.createLinearGradient(x - 26, y - 20, x + 26, y + 20);
-			cg.addColorStop(0, "#6b6f74");
-			cg.addColorStop(0.35, "#25282c");
-			cg.addColorStop(1, "#0a0b0c");
-			ctx.strokeStyle = cg;
-			ctx.beginPath();
-			ctx.ellipse(x, y, 26, 20, 0, 0, Math.PI * 2);
+			ctx.restore();
+
+			// shaft, control box and grip
+			var A = project(a[0], a[1], a[2]), B = project(b[0], b[1], b[2]);
+			var BX = project(box[0], box[1], box[2]), GR = project(grip[0], grip[1], grip[2]);
+			if (A && B) {
+				var ang = Math.atan2(B.y - A.y, B.x - A.x);
+				var len = Math.hypot(B.x - A.x, B.y - A.y);
+				ctx.save();
+				ctx.translate(A.x, A.y);
+				ctx.rotate(ang);
+				var w0 = 2.2 * A.s, w1 = 2.2 * B.s;
+				var sg = ctx.createLinearGradient(0, -w1, 0, w1);
+				sg.addColorStop(0, "#f2f2f2");
+				sg.addColorStop(0.45, "#a9adb2");
+				sg.addColorStop(1, "#5b6066");
+				ctx.fillStyle = sg;
+				ctx.beginPath();
+				ctx.moveTo(0, -w0 / 2);
+				ctx.lineTo(len, -w1 / 2);
+				ctx.lineTo(len, w1 / 2);
+				ctx.lineTo(0, w0 / 2);
+				ctx.fill();
+				ctx.restore();
+			}
+			if (GR && B) {
+				ctx.strokeStyle = "#141414";
+				ctx.lineCap = "round";
+				ctx.lineWidth = 3.6 * GR.s;
+				ctx.beginPath();
+				ctx.moveTo(GR.x, GR.y);
+				ctx.lineTo(B.x, B.y);
+				ctx.stroke();
+			}
+			if (BX && A && B) {
+				ctx.save();
+				ctx.translate(BX.x, BX.y);
+				ctx.rotate(Math.atan2(B.y - A.y, B.x - A.x));
+				var bw = 14 * BX.s, bh = 8 * BX.s;
+				var bg = ctx.createLinearGradient(0, -bh / 2, 0, bh / 2);
+				bg.addColorStop(0, "#4a4f55");
+				bg.addColorStop(1, "#1d2024");
+				ctx.fillStyle = bg;
+				ctx.fillRect(-bw / 2, -bh / 2, bw, bh);
+				ctx.fillStyle = beepFlash > 0.3 ? "#b8f5a0" : "#2c3a2e";
+				ctx.fillRect(-bw * 0.3, -bh * 0.28, bw * 0.6, bh * 0.56);
+				ctx.restore();
+			}
+
+			// glow on a hit
+			var ring = ringPath(x, y, gz + hover, COIL_R, COIL_R);
+			if (!ring) return;
+			if (s > 0) {
+				ctx.strokeStyle = "rgba(184,245,160," + (0.2 + 0.6 * s * beepFlash) + ")";
+				ctx.lineWidth = (3 + 5 * beepFlash * s) * c0.s;
+				strokePts(ring);
+				ctx.stroke();
+			}
+			// the coil: black plastic ring with a highlight
+			ctx.lineJoin = "round";
+			ctx.strokeStyle = "#16181b";
+			ctx.lineWidth = 3.2 * c0.s;
+			strokePts(ring);
 			ctx.stroke();
-			ctx.fillStyle = "rgba(20,20,20,0.12)";
+			ctx.fillStyle = "rgba(20,20,20,0.08)";
 			ctx.fill();
-			ctx.strokeStyle = "rgba(255,255,255,0.25)";
-			ctx.lineWidth = 1.2;
-			ctx.beginPath();
-			ctx.ellipse(x, y, 28, 22, 0, Math.PI * 1.05, Math.PI * 1.55);
-			ctx.stroke();
+			var hi = ringPath(x, y, gz + hover + 1.2, COIL_R, COIL_R);
+			if (hi) {
+				ctx.strokeStyle = "rgba(255,255,255,0.28)";
+				ctx.lineWidth = 0.8 * c0.s;
+				ctx.beginPath();
+				for (var i = 14; i <= 22; i++) { i === 14 ? ctx.moveTo(hi[i].x, hi[i].y) : ctx.lineTo(hi[i].x, hi[i].y); }
+				ctx.stroke();
+			}
 			ctx.strokeStyle = "#ff7a3d";
-			ctx.lineWidth = 2;
+			ctx.lineWidth = 1 * c0.s;
 			ctx.beginPath();
-			ctx.ellipse(x, y, 22, 16, 0, Math.PI * 0.1, Math.PI * 0.35);
+			for (var j = 2; j <= 6; j++) { j === 2 ? ctx.moveTo(ring[j].x, ring[j].y) : ctx.lineTo(ring[j].x, ring[j].y); }
 			ctx.stroke();
 		}
 
+		// a sailboat drifting along the horizon
+		var boat = { x: rr(-0.4, 0.4), speed: rr(-1, 1) > 0 ? 1 : -1 };
+		function drawBoat(t) {
+			var p = project(boat.x * 40000 + boat.speed * t * 40, 60000, 0);
+			if (!p) return;
+			var hgt = 900 * p.s;
+			ctx.save();
+			ctx.globalAlpha = 0.75;
+			ctx.fillStyle = "#f4f3ee";
+			ctx.beginPath();
+			ctx.moveTo(p.x, p.y - hgt);
+			ctx.lineTo(p.x + hgt * 0.45, p.y - hgt * 0.12);
+			ctx.lineTo(p.x, p.y - hgt * 0.12);
+			ctx.fill();
+			ctx.fillStyle = "#e6e4dc";
+			ctx.beginPath();
+			ctx.moveTo(p.x - 0.5, p.y - hgt * 0.85);
+			ctx.lineTo(p.x - hgt * 0.3, p.y - hgt * 0.12);
+			ctx.lineTo(p.x - 0.5, p.y - hgt * 0.12);
+			ctx.fill();
+			ctx.fillStyle = "#5b6470";
+			ctx.fillRect(p.x - hgt * 0.35, p.y - hgt * 0.12, hgt * 0.85, Math.max(1, hgt * 0.1));
+			ctx.restore();
+		}
+
 		// ---------- loop ----------
-		var last = performance.now(), clock = 0, waterNow = 0;
+		var last = performance.now(), clock = 0, slowFrames = 0, frameAvg = 16;
 		function frame(now) {
 			var dt = Math.min(0.05, (now - last) / 1000);
+			frameAvg = frameAvg * 0.95 + (now - last) * 0.05;
 			last = now;
 			clock = (now / 1000) % 1000;
-			waterNow = shoreY() + tideOffset(now);
+			updateWater(clock, now);
 
-			if (gl) renderFrame(clock, waterNow);
+			// drop the water resolution a notch if the GPU is struggling
+			if (gl && frameAvg > 26 && glQuality > 0.55) {
+				if (++slowFrames > 90) { glQuality *= 0.8; sizeGL(); slowFrames = 0; frameAvg = 16; }
+			} else slowFrames = 0;
+
+			if (gl) renderFrame(clock);
 
 			ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 			ctx.clearRect(0, 0, W, H);
@@ -1437,15 +1747,10 @@
 				ctx.fillStyle = "#d9c39a";
 				ctx.fillRect(0, 0, W, H);
 				ctx.fillStyle = "#2c8db5";
-				ctx.fillRect(0, 0, W, waterNow);
-				holes.forEach(function (h) {
-					ctx.fillStyle = "#8a6a3a";
-					ctx.beginPath();
-					ctx.ellipse(h.fx * W, h.fy * H, holeR(h), holeR(h) * 0.8, 0, 0, Math.PI * 2);
-					ctx.fill();
-				});
+				ctx.fillRect(0, 0, W, H * SHORE_AT);
 			}
-			drawRunners(dt, now);
+			drawBoat(clock);
+			drawRunners(dt);
 			drawParticles(dt);
 			drawRisers(dt, now);
 
@@ -1576,15 +1881,15 @@
 			if (e.pointerType === "mouse" && !isTouch) coil.visible = false;
 		});
 		function moveCoil(e) {
+			var sx = e.clientX, sy = e.clientY;
 			if (e.pointerType === "touch") {
 				if (!isTouch) { isTouch = true; document.body.classList.add("touch"); }
-				// keep the coil above your finger so you can see it
-				coil.x = e.clientX;
-				coil.y = e.clientY - 70;
-			} else {
-				coil.x = e.clientX;
-				coil.y = e.clientY;
+				sy -= 70; // keep the coil above your finger so you can see it
 			}
+			var p = unproject(sx, sy);
+			if (!p) { coil.visible = false; return; }
+			coil.x = p.x;
+			coil.y = p.y;
 			coil.visible = true;
 		}
 		document.getElementById("digBtn").addEventListener("click", function () {
@@ -1617,21 +1922,27 @@
 			started = true;
 			try { startAudio(); } catch (e) {}
 			if (isTouch) {
-				coil.x = W / 2;
-				coil.y = (shoreY() + H - TRAY) / 2;
-				coil.visible = true;
+				var p = unproject(W / 2, H * 0.62);
+				if (p) { coil.x = p.x; coil.y = p.y; coil.visible = true; }
 			}
 		});
 
 		initGL();
-		window.addEventListener("resize", resize);
-		resize();
+		var resizeTimer = null;
+		window.addEventListener("resize", function () {
+			clearTimeout(resizeTimer);
+			resizeTimer = setTimeout(resize, 150);
+		});
+		W = window.innerWidth;
+		H = window.innerHeight;
+		setupCamera();
 		bury();
+		resize();
 		renderTray();
 		requestAnimationFrame(frame);
 
 		// for poking at it from the console
-		window.beach = { things: function () { return things; }, dig: dig };
+		window.beach = { things: function () { return things; }, project: project, groundZ: groundZ, dig: dig };
 	})();
 	</script>
 </body>
