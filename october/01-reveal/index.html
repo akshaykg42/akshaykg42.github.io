@@ -559,11 +559,46 @@
 		}
 
 		// a bright net of caustics on the sea floor
+		// small waves: each one shoals, steepens, curls over, spills into whitewater,
+		// and arrives as the swash running up the sand (one every WAVE_T seconds, two in flight)
+		const float WAVE_T = 7.0;
+		float breakers(vec2 p, float t, out float foam, out float glow) {
+			float h = 0.0;
+			foam = 0.0;
+			glow = 0.0;
+			float ph = t / WAVE_T;
+			for (int k = 0; k < 2; k++) {
+				float i = floor(ph) - float(k);
+				float a = (ph - i) / 2.0;
+				float seed = i * 1.7;
+				float D = 1400.0 * pow(1.0 - a, 1.3);
+				float crestY = uShoreY + D + 22.0 * sin(p.x * 0.004 + seed) + 12.0 * sin(p.x * 0.011 - seed * 0.6);
+				float dBreak = 130.0 + 50.0 * sin(p.x * 0.0035 + seed * 2.3);
+				float broken = smoothstep(dBreak + 10.0, dBreak - 30.0, D);
+				float H = (8.0 + 20.0 * smoothstep(1400.0, 250.0, D)) * (0.8 + 0.3 * sin(p.x * 0.006 + seed));
+				H *= mix(1.0, 0.35, broken) * smoothstep(0.0, 40.0, D);
+				float dy = p.y - crestY;
+				float wf = mix(60.0, 26.0, smoothstep(600.0, dBreak, D));
+				wf = mix(wf, 34.0, broken);
+				float prof = dy < 0.0 ? exp(-dy * dy / (wf * wf)) : exp(-dy * dy / 9000.0);
+				h += H * prof;
+				// thin lip lit from behind just before it goes
+				glow += prof * (1.0 - smoothstep(-6.0, 14.0, dy)) * smoothstep(600.0, dBreak, D) * (1.0 - broken);
+				// whitewater spreading behind the break
+				float age = clamp((dBreak - D) / 120.0, 0.0, 1.0);
+				float band = smoothstep(-wf * 1.2, -wf * 0.2, dy) * (1.0 - smoothstep(10.0, 40.0 + 170.0 * age, dy));
+				foam += broken * band * (1.0 - 0.55 * age);
+				// spray feathering off the crest
+				foam += (1.0 - broken) * smoothstep(260.0, dBreak, D) * exp(-pow((dy + 4.0) / 6.0, 2.0)) * 0.6;
+			}
+			return h;
+		}
+
 		float caustics(vec2 p, float t) {
 			p += vec2(fbm3(p * 0.02 + t * 0.12), fbm3(p * 0.02 + 5.0 - t * 0.12)) * 30.0;
 			float a = vorEdge(p * 0.05, t * 0.8);
 			float b = vorEdge(p * 0.08 + 3.7, t * 1.1);
-			return pow(1.0 - smoothstep(0.0, 0.16, a), 3.0) + 0.55 * pow(1.0 - smoothstep(0.0, 0.12, b), 3.0);
+			return pow(1.0 - smoothstep(0.0, 0.2, a), 3.5) + 0.5 * pow(1.0 - smoothstep(0.0, 0.15, b), 3.5);
 		}
 
 		vec2 regionUV(vec2 p) { return (p - uRegion.xy) / uRegion.zw; }
@@ -624,14 +659,24 @@
 				col += vec3(1.0, 0.95, 0.85) * pow(max(dot(rd, sun), 0.0), 300.0) * (film * 2.5 + wet * 0.4);
 			} else {
 				// ---- sea ----
+				// walk the ray onto the wave surface so crests stand up against the sky behind them
+				float bf, bg, bh = 0.0;
+				for (int k = 0; k < 7; k++) {
+					vec3 Sk = C + dir * tw;
+					bh = breakers(Sk.xy, t, bf, bg);
+					tw = mix(tw, (wl + bh - C.z) / dir.z, 0.6);
+				}
 				vec3 S = C + dir * tw;
 				dist = tw;
 				float lod = 1.0 / (1.0 + tw / 900.0);
 				float e = 1.0 + tw * 0.002;
 				vec2 gr = vec2(waveH(S.xy + vec2(e, 0.0), t, lod) - waveH(S.xy, t, lod),
 				               waveH(S.xy + vec2(0.0, e), t, lod) - waveH(S.xy, t, lod)) / e;
-				float depthV = wl - groundZ(S.xy);
-				vec3 n = normalize(vec3(-gr * 4.0 * smoothstep(0.0, 1.5, depthV), 1.0));
+				float wfoam, wglow, f2, g2;
+				bh = breakers(S.xy, t, wfoam, wglow);
+				vec2 bgr = vec2(breakers(S.xy + vec2(2.0, 0.0), t, f2, g2) - bh, breakers(S.xy + vec2(0.0, 2.0), t, f2, g2) - bh) / 2.0;
+				float depthV = wl + bh - groundZ(S.xy);
+				vec3 n = normalize(vec3(-gr * 4.0 * smoothstep(0.0, 1.5, depthV) - bgr, 1.0));
 
 				// look through the surface at the sea floor
 				vec3 rdir = refract(dir, n, 1.0 / 1.333);
@@ -640,7 +685,7 @@
 				vec2 buv = regionUV(B.xy);
 				vec3 bed = texture2D(uCol, buv).rgb * vec3(0.62, 0.66, 0.60);
 				float ca = caustics(B.xy + n.xy * 25.0, t);
-				bed += vec3(0.80, 1.0, 0.95) * ca * 0.5 * exp(-depthV / 25.0) * smoothstep(0.0, 0.8, depthV) * exp(-tw / 2500.0);
+				bed += vec3(0.80, 1.0, 0.95) * ca * 0.38 * exp(-depthV / 25.0) * smoothstep(0.0, 0.8, depthV) * exp(-tw / 2500.0);
 				vec3 T = exp(-vec3(0.0107, 0.0032, 0.0039) * t2 * 1.6);
 				vec3 scat = vec3(0.02, 0.17, 0.26);
 				vec3 w = bed * T + scat * (1.0 - T);
@@ -653,14 +698,18 @@
 				w = mix(w, sky(rd, false) * 0.78, F);
 				float sp = max(dot(rd, sun), 0.0);
 				w += vec3(1.0, 0.95, 0.85) * (pow(sp, 1800.0) * 7.0 + pow(sp, 150.0) * 0.25);
+				// sunlight shining through the face of a wave about to break
+				w = mix(w, vec3(0.16, 0.48, 0.44), clamp(wglow * smoothstep(0.03, 0.35, bgr.y), 0.0, 1.0) * 0.55);
+				// the face toward you is a touch darker than the back
+				w *= 1.0 - 0.32 * smoothstep(0.05, 0.5, bgr.y) * (1.0 - wglow);
 
 				// foam: lacy at the waterline, plus broken lines where waves spill
 				vec2 fp = mat2(0.8, -0.6, 0.6, 0.8) * S.xy;
 				float fn = fbm(fp * vec2(0.03, 0.05) + vec2(t * 0.1, t * 0.3)) * 0.7 + fbm3(fp * 0.13 - vec2(0.0, t * 0.4)) * 0.3;
 				float edgeFoam = smoothstep(1.2, 0.0, depthV) * smoothstep(0.42, 0.62, fn + smoothstep(0.35, 0.0, depthV) * 0.6);
-				float br = sin(S.y * 0.025 + t * 1.3 + vnoise(vec2(S.x * 0.006, t * 0.1)) * 2.0);
-				float line = smoothstep(0.75, 1.0, br) * smoothstep(0.45, 0.68, fn) * smoothstep(1.0, 3.0, depthV) * (1.0 - smoothstep(8.0, 20.0, depthV));
-				float foam = clamp(edgeFoam + line * 0.8, 0.0, 1.0) * lod;
+				float white = smoothstep(0.32, 0.5, fn * 0.75 + wfoam * 0.55) * clamp(wfoam * 2.0, 0.0, 1.0);
+				white *= 0.75 + 0.25 * vnoise(S.xy * 0.2 + t);
+				float foam = clamp(edgeFoam + white, 0.0, 1.0) * mix(lod, 1.0, 0.5);
 				w = mix(w, vec3(0.94, 0.96, 0.97) * (0.85 + 0.15 * max(dot(n, sun), 0.0)), foam * 0.92);
 				col = w;
 			}
@@ -1257,8 +1306,15 @@
 			var s = (t / SWASH_T) % 1;
 			return s < 0.3 ? Math.sin(s / 0.3 * Math.PI / 2) : Math.cos((s - 0.3) / 0.7 * Math.PI / 2);
 		}
-		var waterNow = 0, waterHigh = 0;
+		var waterNow = 0, waterHigh = 0, lastPhase = 0;
 		function updateWater(t, now) {
+			// the near wave breaks about 72% of the way through each cycle
+			var ph = (t / SWASH_T) % 1;
+			if (AC && lastPhase < 0.7 && ph >= 0.7 && !muted) {
+				noiseBurst(1.4, 420, 0.55, 0);
+				noiseBurst(0.9, 1600, 0.18, 0.05);
+			}
+			lastPhase = ph;
 			var tideZ = tideOffset(now);
 			var sw = swash(t);
 			waterNow = tideZ - 0.6 + 1.5 * sw;
@@ -1731,7 +1787,7 @@
 			var dt = Math.min(0.05, (now - last) / 1000);
 			frameAvg = frameAvg * 0.95 + (now - last) * 0.05;
 			last = now;
-			clock = (now / 1000) % 1000;
+			clock = (now / 1000) % 980; // 980 s = 140 waves, so the wrap is seamless
 			updateWater(clock, now);
 
 			// drop the water resolution a notch if the GPU is struggling
