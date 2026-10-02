@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Weird Web October 2026 · Akshay</title>
+	<meta name="description" content="31 days, 31 tiny weird websites. My Weird Web October 2026 calendar.">
+	<link rel="stylesheet" href="../assets/css/style.css">
+</head>
+<body>
+	<main class="page">
+		<a class="back" href="../">← back home</a>
+
+		<header class="oct-head">
+			<div class="hand">a website a day keeps the algorithm away</div>
+			<h1>Weird Web October 2026</h1>
+			<p>One tiny website every day of October, each built around that day's theme from <a href="https://weirdweboctober.website/">weirdweboctober.website</a>. Made for fun, not for likes.</p>
+		</header>
+
+		<div class="calendar" id="calendar">
+			<div class="dow">Mon</div><div class="dow">Tue</div><div class="dow">Wed</div><div class="dow">Thu</div><div class="dow">Fri</div><div class="dow">Sat</div><div class="dow">Sun</div>
+		</div>
+
+		<div class="legend">
+			<span>🎉 made</span>
+			<span>🚧 under construction</span>
+			<span>👻 skipped</span>
+			<span>🔒 not yet</span>
+			<span>#tag = everyone's sites for that theme</span>
+		</div>
+
+		<footer class="footer hand">#weirdweboctober</footer>
+	</main>
+
+	<script src="days.js"></script>
+	<script>
+		(function () {
+			var cal = document.getElementById("calendar");
+			var today = window.wwoToday();
+
+			// October 1, 2026 is a Thursday, so pad Mon to Wed
+			var firstDow = (new Date(2026, 9, 1).getDay() + 6) % 7;
+			for (var i = 0; i < firstDow; i++) {
+				var pad = document.createElement("div");
+				pad.className = "pad";
+				cal.appendChild(pad);
+			}
+
+			window.WWO_DAYS.forEach(function (d) {
+				var el = document.createElement("div");
+				var state, note, badge = "";
+				if (d.url) {
+					state = "done";
+					note = '<a class="go" href="' + d.url + '">' + (d.wip ? "peek →" : "visit →") + "</a>";
+					badge = d.wip ? "🚧" : "🎉";
+				} else if (d.day < today) {
+					state = "missed";
+					note = "skipped";
+					badge = "👻";
+				} else if (d.day === today) {
+					state = "";
+					note = "in the oven";
+				} else {
+					state = "locked";
+					note = "opens Oct " + d.day;
+					badge = "🔒";
+				}
+				el.className = "day " + state + (d.day === today ? " today" : "");
+
+				var tag = "https://octothorp.es/~/" + encodeURIComponent(d.theme);
+				el.innerHTML =
+					(badge ? '<span class="badge" aria-hidden="true">' + badge + "</span>" : "") +
+					'<span class="num">' + d.day + "</span>" +
+					'<span class="theme">' + d.theme + "</span>" +
+					'<span class="note">' + note + "</span>" +
+					'<a class="tag" href="' + tag + '" title="Everyone\'s ' + d.theme + ' sites on Octothorpes">#' + d.theme.replace(" ", "") + "</a>";
+				cal.appendChild(el);
+			});
+		})();
+	</script>
+	<script src="../assets/js/weird.js"></script>
+</body>
+</html>

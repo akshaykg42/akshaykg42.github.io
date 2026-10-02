@@ -1,48 +1,75 @@
-<!DOCTYPE HTML>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>Akshay Kumar Gupta</title>
-	<link rel = "stylesheet" type = "text/css" href = "assets/css/style.css">
-	<script src="https://kit.fontawesome.com/079c50ad75.js" crossorigin="anonymous"></script>
-
-	<meta name = "description" content = "Hello! I'm a software engineer on the Risk Engineering team at Plaid. Previously, I studied Computer Science at The University of Texas at Austin, where I was a member of the TAUR Lab and wrote my honors thesis under the guidance of Dr. Greg Durrett. My interests are Risk & Fraud, Payments, Security, Machine Learning and Search.">
-	<meta name = "charset" content = "utf-8">
-	<meta http-equiv = "content-type" content = "text/html; charset = utf-8">
+	<meta name="description" content="Hi, I'm Akshay Kumar Gupta, a software engineer on the Fraud team at Plaid. This October I'm making one tiny weird website a day for Weird Web October.">
+	<link rel="stylesheet" href="assets/css/style.css">
 </head>
-<body ondblclick = "translate()">
+<body>
+	<div class="marquee" aria-hidden="true"><span>
+		✦ welcome to my corner of the internet ✦ now with 100% more weird ✦ one tiny website a day this october ✦ double-click anywhere ✦ best viewed with any browser ✦&nbsp;
+		✦ welcome to my corner of the internet ✦ now with 100% more weird ✦ one tiny website a day this october ✦ double-click anywhere ✦ best viewed with any browser ✦&nbsp;
+	</span></div>
 
-	<div class = "vertical">
+	<main class="page">
+		<section class="hero">
+			<figure class="polaroid">
+				<img src="assets/images/self.PNG" alt="Photo of Akshay">
+				<figcaption class="hand">it me :)</figcaption>
+			</figure>
+			<div>
+				<h1 class="name" data-wobble>Akshay Kumar Gupta</h1>
+				<p class="tagline hand">software engineer · fraud fighter · maker of small weird things</p>
+				<ul class="links">
+					<li><a href="https://github.com/akshaykg42">GitHub</a></li>
+					<li><a href="https://linkedin.com/in/akshaykg42">LinkedIn</a></li>
+					<li><a href="https://twitter.com/wizardgupta">Twitter</a></li>
+					<li><a href="https://unsplash.com/@wizardgupta">Unsplash</a></li>
+					<li><a href="assets/files/Resume.pdf">Résumé</a></li>
+				</ul>
+				<p class="email">akshaykg42 [at] gmail [dot] com</p>
+			</div>
+		</section>
 
-		<center>
-		
-		<br>
-		<div class = "self-img">
-			<img src = "assets/images/self.PNG" width=20%>
-		</div>
+		<section class="cards">
+			<div class="sticker tilt-l">
+				<h2>Hello!</h2>
+				<p>I'm a software engineer on the Fraud team at <a href="https://plaid.com">Plaid</a>.</p>
+				<p>Before that I studied Computer Science at <a href="https://www.cs.utexas.edu/">The University of Texas at Austin</a>, where I was a member of the <a href="http://taur.cs.utexas.edu/">TAUR Lab</a> and wrote my <a href="assets/files/thesis.pdf">honors thesis</a> under the guidance of <a href="https://www.cs.utexas.edu/~gdurrett/">Dr. Greg Durrett</a>.</p>
+				<p>I'm into risk &amp; fraud, payments, security, machine learning and search.</p>
+			</div>
 
-		<div class = "name">
-			Akshay Kumar Gupta
-		</div>
-	
-		<div class = "email">
-			akshaykg42 [at] gmail [dot] com
-		</div>
-			
-		<div class = "links">
-                        <a href = "https://github.com/akshaykg42"><i class="fab fa-github-alt"></i></a> &nbsp; &nbsp;
-                        <!--<a href = "http://devpost.com/akshaykg42"></a> &nbsp; &nbsp;-->
-			<a href = "https://linkedin.com/in/akshaykg42"><i class="fab fa-linkedin-in"></i></a> &nbsp; &nbsp;
-			<a href = "https://twitter.com/wizardgupta"><i class="fab fa-twitter"></i></a> &nbsp; &nbsp;
-			<a href = "https://unsplash.com/@wizardgupta"><i class="fab fa-unsplash"></i></a>
-		</div>
+			<a class="sticker tilt-r wwo-tile" href="october/">
+				<div class="big">Weird Web October 2026 🎃</div>
+				<div>One tiny, silly website every day of October.</div>
+				<div class="today" id="wwo-today">31 themes, 31 sites</div>
+				<div class="progress" aria-hidden="true"><div id="wwo-bar" style="width: 0%"></div></div>
+				<div class="hand" id="wwo-count" style="margin-top: 8px">see the calendar →</div>
+			</a>
+		</section>
 
-		<div class = "email">
-			<span style = "color: black">Hello! I'm a software engineer on the Risk Engineering team at <a href = "https://plaid.com">Plaid</a>. Previously, I studied Computer Science at <a href = "https://www.cs.utexas.edu/">The University of Texas at Austin</a>, where I was a member of the <a href = "http://taur.cs.utexas.edu/">TAUR Lab</a> and wrote my <a href = "assets/files/thesis.pdf">honors thesis</a> under the guidance of <a href = "https://www.cs.utexas.edu/~gdurrett/">Dr. Greg Durrett</a>. My interests are Risk & Fraud, Payments, Security, Machine Learning and Search. You can see my résumé <a href = "assets/files/Resume.pdf">here</a>!</span>
-		</div>
-			
-		<br><br>
-			
-		</center>
-	</div>
+		<footer class="footer">
+			you have visited this page<span class="counter" data-counter><b>0</b></span>times
+			<br>
+			<span class="hand">handmade with html, css and a little nonsense</span>
+		</footer>
+	</main>
+
+	<script src="october/days.js"></script>
+	<script>
+		(function () {
+			var days = window.WWO_DAYS;
+			var today = window.wwoToday();
+			var done = days.filter(function (d) { return d.url && !d.wip; }).length;
+			document.getElementById("wwo-bar").style.width = Math.max(4, done / 31 * 100) + "%";
+			document.getElementById("wwo-count").textContent = done + " / 31 made so far → see the calendar";
+			if (today >= 1 && today <= 31) {
+				document.getElementById("wwo-today").textContent = "today, day " + today + ": " + days[today - 1].theme;
+			}
+		})();
+	</script>
+	<script src="assets/js/weird.js"></script>
 </body>
 </html>
