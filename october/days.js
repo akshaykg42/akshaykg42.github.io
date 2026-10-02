@@ -2,10 +2,10 @@
 // Themes from https://weirdweboctober.website/
 //
 // To publish a day: make a folder like october/03-fake/ with an index.html,
-// then set that day's `url` below. Add `wip: true` while it's still under construction.
+// then set that day's `url` below, e.g. url: "03-fake/".
 window.WWO_DAYS = [
-  { day: 1,  theme: "Reveal",       url: "01-reveal/", wip: true },
-  { day: 2,  theme: "Spark",        url: "02-spark/",  wip: true },
+  { day: 1,  theme: "Reveal" },
+  { day: 2,  theme: "Spark" },
   { day: 3,  theme: "Fake" },
   { day: 4,  theme: "Plastic" },
   { day: 5,  theme: "Sheet" },
