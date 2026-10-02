@@ -533,7 +533,13 @@ scene.add(boat);
 // ---------- game state ----------
 let things = [];
 let runners = [];
-const player = { x: 0, z: -0.8, vx: 0, vz: 0, bob: 0, stride: 0, foot: 1 };
+const player = { x: 0, z: -0.8, vx: 0, vz: 0, bob: 0, stride: 0, foot: 1, yaw: 0, turn: 0 };
+const joy = { x: 0, y: 0 }; // the on-screen stick on phones
+// which way you're facing: yaw 0 looks out to sea (-z)
+function facing() {
+	const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
+	return { fx, fz, rx: -fz, rz: fx };
+}
 const coil = { x: 0.3, z: -2.9, tx: 0.3, tz: -2.9, y: 0 };
 let pointer = { sx: 0, sy: 0, has: false, touch: false };
 let walkTarget = null;
@@ -755,7 +761,7 @@ function updateWater(t, now, dt) {
 function startTide() {
 	if (tide || busy) return;
 	if (DIG.on) { setTimeout(startTide, 500); return; }
-	tide = { start: performance.now(), swapped: false };
+	tide = { start: clockNow, swapped: false };
 }
 function tideOffset(now) {
 	if (!tide) return 0;
@@ -1002,6 +1008,8 @@ function startDig(x, z) {
 	}
 	DIG.on = true;
 	DIG.hole = hole;
+	// remember where you were standing (if you were already walking back there, keep that spot)
+	DIG.home = walkTarget && walkTarget.home ? walkTarget : { x: player.x, z: player.z, home: true };
 	// step up to the hole so you're digging at your feet
 	DIG.stand = { x: clamp(hole.x - DIG.f.x * 0.85, WALK.x0, WALK.x1), z: clamp(hole.z - DIG.f.z * 0.85, WALK.z0, WALK.z1) };
 	DIG.phase = "walk";
@@ -1278,11 +1286,19 @@ function screenToGround(sx, sy) {
 	return { x: o.x + d.x * t, z: o.z + d.z * t, t };
 }
 function reachClamp(p) {
-	let dx = p.x - player.x, dz = p.z - player.z;
-	if (dz > -0.4) dz = -0.4;
-	const len = Math.hypot(dx, dz);
+	const F = facing();
+	const dx = p.x - player.x, dz = p.z - player.z;
+	const a = Math.max(dx * F.fx + dz * F.fz, 0.4), sd = dx * F.rx + dz * F.rz;
+	const len = Math.hypot(a, sd);
 	const L = clamp(len, REACH_MIN, REACH);
-	return { x: player.x + dx / len * L, z: player.z + dz / len * L, beyond: len > REACH + 0.15 };
+	const la = a / len * L, ls = sd / len * L;
+	return { x: player.x + F.fx * la + F.rx * ls, z: player.z + F.fz * la + F.rz * ls, beyond: len > REACH + 0.15 };
+}
+// clicking far sand walks you to a spot a couple of metres short of it, so it ends up in reach
+function walkToward(g) {
+	const dx = g.x - player.x, dz = g.z - player.z, d = Math.hypot(dx, dz) || 1;
+	const stop = Math.max(d - 2.0, 0);
+	walkTarget = { x: clamp(player.x + dx / d * stop, WALK.x0, WALK.x1), z: clamp(player.z + dz / d * stop, WALK.z0, WALK.z1) };
 }
 
 const walkRing = new THREE.Mesh(new THREE.RingGeometry(0.16, 0.2, 40), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, depthWrite: false }));
@@ -1294,28 +1310,53 @@ const keys = {};
 const handPos = new THREE.Vector3(), coilPos = new THREE.Vector3(), groundN = new THREE.Vector3();
 let pitch = 0.38;
 function updatePlayer(dt, t) {
+	// turning: arrow keys, Q/E, right-drag (player.turn) or the stick
+	let turn = 0;
+	if (keys.ArrowLeft || keys.KeyQ) turn += 1;
+	if (keys.ArrowRight || keys.KeyE) turn -= 1;
+	turn -= joy.x * Math.abs(joy.x);
+	// with no pointer steering it, the coil stays where it is relative to you as you walk and turn
+	const F0 = facing(), cdx = coil.tx - player.x, cdz = coil.tz - player.z;
+	const ca = cdx * F0.fx + cdz * F0.fz, cs = cdx * F0.rx + cdz * F0.rz;
+	if (!DIG.on && !busy) player.yaw += turn * 1.5 * dt + player.turn;
+	player.turn = 0;
+	const F = facing();
+	// walking: W/S forward and back, A/D sideways, or the stick
 	let ix = 0, iz = 0;
-	if (keys.KeyA || keys.ArrowLeft) ix -= 1;
-	if (keys.KeyD || keys.ArrowRight) ix += 1;
-	if (keys.KeyW || keys.ArrowUp) iz -= 1;
-	if (keys.KeyS || keys.ArrowDown) iz += 1;
-	if (ix || iz) walkTarget = null;
+	if (keys.KeyA) ix -= 1;
+	if (keys.KeyD) ix += 1;
+	if (keys.KeyW || keys.ArrowUp) iz += 1;
+	if (keys.KeyS || keys.ArrowDown) iz -= 1;
+	iz += joy.y;
+	if (Math.abs(ix) + Math.abs(iz) > 0.05) walkTarget = null;
 	let tx = 0, tz = 0;
 	if (walkTarget) {
-		const dx = walkTarget.x - player.x, dz = walkTarget.z + 2.0 - player.z;
+		const dx = walkTarget.x - player.x, dz = walkTarget.z - player.z;
 		const d = Math.hypot(dx, dz);
-		if (d < 0.08) walkTarget = null;
-		else { tx = dx / d; tz = dz / d; }
-	} else if (ix || iz) {
-		const l = Math.hypot(ix, iz);
-		tx = ix / l;
-		tz = iz / l;
+		if (d < 0.04) {
+			const k = walkTarget.home ? 0 : 0.3;
+			if (walkTarget.home) { player.x = walkTarget.x; player.z = walkTarget.z; }
+			walkTarget = null;
+			player.vx *= k;
+			player.vz *= k;
+		} else { tx = dx / d; tz = dz / d; }
+	} else if (Math.abs(ix) + Math.abs(iz) > 0.05) {
+		const wx = F.rx * ix + F.fx * iz, wz = F.rz * ix + F.fz * iz;
+		const l = Math.max(1, Math.hypot(wx, wz));
+		tx = wx / l;
+		tz = wz / l;
 	}
-	let speed = busy || tide || DIG.on ? 0 : 1.35;
+	// slow down as you arrive so you stop on the spot instead of sliding past it
+	let speed = busy || tide || DIG.on ? 0 : walkTarget ? Math.min(1.35, 0.1 + Math.hypot(walkTarget.x - player.x, walkTarget.z - player.z) * 3) : 1.35;
 	if (DIG.on && DIG.stand) {
 		const dx = DIG.stand.x - player.x, dz = DIG.stand.z - player.z, d = Math.hypot(dx, dz);
 		if (d > 0.03) { tx = dx / d; tz = dz / d; speed = Math.min(1.3, d * 5); }
 		else if (DIG.phase === "walk") { DIG.phase = "in"; DIG.pt = 0; }
+	}
+	// and after digging, step back to where you were
+	if (!DIG.on && DIG.home && !walkTarget) {
+		walkTarget = DIG.home;
+		DIG.home = null;
 	}
 	const k = 1 - Math.exp(-dt * 8);
 	player.vx += (tx * speed - player.vx) * k;
@@ -1347,18 +1388,26 @@ function updatePlayer(dt, t) {
 	followRegion(false);
 	const gy = smoothGroundY(player.x, player.z);
 	const bobY = Math.sin(player.bob) * 0.018 * clamp(Math.hypot(player.vx, player.vz), 0, 1);
-	camera.position.set(player.x + Math.sin(player.bob * 0.5) * 0.01, gy + EYE + bobY, player.z + 0.15);
-	let lookDown = pitch;
+	const sway = Math.sin(player.bob * 0.5) * 0.01;
+	camera.position.set(player.x - F.fx * 0.15 + F.rx * sway, gy + EYE + bobY, player.z - F.fz * 0.15 + F.rz * sway);
+	let lookDown = pitch, yaw = player.yaw;
 	if (DIG.lay > 0 && DIG.hole) {
-		// look down at the hole, a little above centre so the tray doesn't cover it
-		const hd = Math.hypot(DIG.hole.x - player.x, DIG.hole.z - player.z - 0.15);
-		lookDown += (Math.atan2(gy + EYE - smoothGroundY(DIG.hole.x, DIG.hole.z), hd) - 0.1 - pitch) * ease(DIG.lay);
+		// face the hole and look down at it, a little above centre so the tray doesn't cover it
+		const hx = DIG.hole.x - camera.position.x, hz = DIG.hole.z - camera.position.z;
+		lookDown += (Math.atan2(gy + EYE - smoothGroundY(DIG.hole.x, DIG.hole.z), Math.hypot(hx, hz)) - 0.1 - pitch) * ease(DIG.lay);
+		let dy = Math.atan2(-hx, -hz) - yaw;
+		dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+		yaw += dy * ease(DIG.lay);
 	}
-	camera.rotation.set(-lookDown, 0, Math.sin(player.bob * 0.5) * 0.004);
+	camera.rotation.order = "YXZ";
+	camera.rotation.set(-lookDown, yaw, Math.sin(player.bob * 0.5) * 0.004);
 	camera.updateMatrixWorld();
 
 	// the coil follows the pointer, as far as your arms reach
-	if (pointer.has) {
+	// while digging and stepping back afterwards the coil stays over the hole
+	const coilFree = !DIG.on && !DIG.home && !(walkTarget && walkTarget.home);
+	if (!coilFree) walkRing.visible = false;
+	else if (pointer.has) {
 		const g = screenToGround(pointer.sx, pointer.sy - (pointer.touch ? 70 : 0));
 		if (g) {
 			const c = reachClamp(g);
@@ -1368,6 +1417,8 @@ function updatePlayer(dt, t) {
 			if (walkRing.visible) walkRing.position.set(g.x, smoothGroundY(g.x, g.z) + 0.01, g.z);
 		} else walkRing.visible = false;
 	} else {
+		coil.tx = player.x + F.fx * ca + F.rx * cs;
+		coil.tz = player.z + F.fz * ca + F.rz * cs;
 		const c = reachClamp({ x: coil.tx, z: coil.tz });
 		coil.tx = c.x;
 		coil.tz = c.z;
@@ -1381,12 +1432,14 @@ function updatePlayer(dt, t) {
 		const a = i * 1.2566;
 		top = Math.max(top, groundY(coil.x + Math.cos(a) * 0.11 * (i ? 1 : 0), coil.z + Math.sin(a) * 0.09 * (i ? 1 : 0)));
 	}
-	const sway = Math.sin(t * 1.3) * 0.004;
-	coil.y += (top + 0.03 + sway - coil.y) * (1 - Math.exp(-dt * 18));
+	const hover = Math.sin(t * 1.3) * 0.004;
+	coil.y += (top + 0.03 + hover - coil.y) * (1 - Math.exp(-dt * 18));
 	const e = 0.15;
 	groundN.set(smoothGroundY(coil.x - e, coil.z) - smoothGroundY(coil.x + e, coil.z), 2 * e, smoothGroundY(coil.x, coil.z - e) - smoothGroundY(coil.x, coil.z + e)).normalize();
 	coilPos.set(coil.x, coil.y, coil.z);
-	handPos.set(player.x + 0.27 + (coil.x - player.x) * 0.12, gy + 1.0 + bobY, player.z - 0.3);
+	// the hand stays by your right hip and leans a little towards the side the coil is on
+	const side = 0.27 + ((coil.x - player.x) * F.rx + (coil.z - player.z) * F.rz) * 0.12;
+	handPos.set(player.x + F.rx * side + F.fx * 0.3, gy + 1.0 + bobY, player.z + F.rz * side + F.fz * 0.3);
 	if (DIG.lay > 0) {
 		// set down on the sand to your right while you dig
 		const w = ease(DIG.lay);
@@ -1403,7 +1456,7 @@ function updatePlayer(dt, t) {
 	if (detector.visible) detector.userData.update(coilPos, groundN, handPos);
 
 	// shadows cover the patch you're working
-	sun.target.position.set(player.x, gy, player.z - 1.5);
+	sun.target.position.set(player.x + F.fx * 1.5, gy, player.z + F.fz * 1.5);
 	sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, 25);
 	sand.position.set(Math.round(player.x / NEAR_STEP) * NEAR_STEP, 0, Math.round(player.z / NEAR_STEP) * NEAR_STEP);
 	water.position.x = Math.round(player.x / 0.11) * 0.11;
@@ -1456,8 +1509,11 @@ function render() {
 	renderer.render(scene, camera);
 }
 
-let simNow = 0;
-function update(dt, now) {
+// game time in ms: advances by each frame's (capped) dt, so the tests can step it too
+let clockNow = 0;
+function update(dt) {
+	clockNow += dt * 1000;
+	const now = clockNow;
 	const t = fixedTime !== null ? fixedTime : (now / 1000) % 980;
 	U.uTime.value = t;
 	updateWater(t, now, dt);
@@ -1477,7 +1533,7 @@ function frame(now) {
 	const dt = Math.min(0.05, (now - last) / 1000);
 	frameAvg = frameAvg * 0.95 + (now - last) * 0.05;
 	last = now;
-	update(dt, now);
+	update(dt);
 	if (frameAvg > 26 && quality > 0.6 && fixedTime === null) {
 		if (++slowFrames > 90) { quality *= 0.85; resize(); slowFrames = 0; frameAvg = 16; }
 	} else slowFrames = 0;
@@ -1661,7 +1717,14 @@ cardOverlay.addEventListener("click", (e) => { if (e.target === cardOverlay) clo
 
 // ---------- input ----------
 let touchStart = null;
+// right-drag (or middle-drag) turns you
+let turning = null;
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("pointermove", (e) => {
+	if (turning) {
+		player.turn -= (e.clientX - turning.x) * 0.006;
+		turning.x = e.clientX;
+	}
 	pointer.sx = e.clientX;
 	pointer.sy = e.clientY;
 	pointer.has = true;
@@ -1674,26 +1737,54 @@ canvas.addEventListener("pointerdown", (e) => {
 	pointer.has = true;
 	pointer.touch = e.pointerType === "touch";
 	if (!started) return;
+	if (e.pointerType === "mouse" && e.button !== 0) {
+		turning = { x: e.clientX };
+		canvas.setPointerCapture(e.pointerId);
+		return;
+	}
 	if (pointer.touch) {
 		document.body.classList.add("touch");
 		touchStart = { x: e.clientX, y: e.clientY, t: performance.now() };
 		return;
 	}
 	const g = screenToGround(e.clientX, e.clientY);
-	if (g && reachClamp(g).beyond) walkTarget = { x: g.x, z: g.z };
+	if (g && reachClamp(g).beyond) walkToward(g);
 	else { DIG.held = true; startDig(coil.x, coil.z); }
 });
-window.addEventListener("pointerup", (e) => { if (e.pointerType !== "touch") DIG.held = false; });
+window.addEventListener("pointerup", (e) => {
+	if (e.pointerType !== "touch") DIG.held = false;
+	if (e.button !== 0) turning = null;
+});
 canvas.addEventListener("pointerup", (e) => {
 	if (!touchStart || !started) return;
 	const moved = Math.hypot(e.clientX - touchStart.x, e.clientY - touchStart.y);
 	if (moved < 12 && performance.now() - touchStart.t < 350) {
 		const g = screenToGround(e.clientX, e.clientY - 70);
-		if (g && reachClamp(g).beyond) walkTarget = { x: g.x, z: g.z };
+		if (g && reachClamp(g).beyond) walkToward(g);
 	}
 	touchStart = null;
 });
 canvas.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") walkRing.visible = false; });
+// the stick on phones: push up to walk forward, sideways to turn
+const stickEl = document.getElementById("stick"), knobEl = stickEl.querySelector("i");
+let stickId = null;
+function stickMove(e) {
+	const r = stickEl.getBoundingClientRect(), R = r.width / 2;
+	let dx = (e.clientX - r.left - R) / R, dy = (e.clientY - r.top - R) / R;
+	const l = Math.hypot(dx, dy);
+	if (l > 1) { dx /= l; dy /= l; }
+	joy.x = Math.abs(dx) < 0.12 ? 0 : dx;
+	joy.y = Math.abs(dy) < 0.12 ? 0 : -dy;
+	knobEl.style.transform = "translate(" + dx * R * 0.6 + "px," + dy * R * 0.6 + "px)";
+}
+function stickEnd() {
+	stickId = null;
+	joy.x = joy.y = 0;
+	knobEl.style.transform = "";
+}
+stickEl.addEventListener("pointerdown", (e) => { e.preventDefault(); stickId = e.pointerId; stickEl.setPointerCapture(e.pointerId); stickMove(e); });
+stickEl.addEventListener("pointermove", (e) => { if (e.pointerId === stickId) stickMove(e); });
+for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) stickEl.addEventListener(ev, stickEnd);
 const digBtn = document.getElementById("digBtn");
 digBtn.addEventListener("pointerdown", (e) => { e.preventDefault(); DIG.held = true; startDig(coil.x, coil.z); });
 for (const ev of ["pointerup", "pointercancel", "pointerleave"]) digBtn.addEventListener(ev, () => { DIG.held = false; });
@@ -1709,7 +1800,7 @@ window.addEventListener("keyup", (e) => {
 	keys[e.code] = false;
 	if (e.code === "Space") DIG.held = false;
 });
-window.addEventListener("blur", () => { for (const k in keys) keys[k] = false; DIG.held = false; });
+window.addEventListener("blur", () => { for (const k in keys) keys[k] = false; DIG.held = false; turning = null; stickEnd(); });
 
 const muteBtn = document.getElementById("muteBtn");
 muteBtn.addEventListener("click", () => {
@@ -1720,7 +1811,7 @@ muteBtn.addEventListener("click", () => {
 document.getElementById("tideBtn").addEventListener("click", () => { if (started) startTide(); });
 if (isTouch) {
 	document.body.classList.add("touch");
-	document.getElementById("digHint").textContent = "Drag to sweep, tap far sand to walk there, and hold DIG to dig.";
+	document.getElementById("digHint").textContent = "Drag to sweep. Use the stick to walk and turn, or tap far sand to walk there. Hold DIG to dig.";
 }
 document.getElementById("startBtn").addEventListener("click", () => {
 	document.getElementById("introOverlay").classList.remove("show");
@@ -1763,11 +1854,24 @@ window.beach = {
 	setTime: (t) => { fixedTime = t; },
 	start: () => document.getElementById("startBtn").click(),
 	tide: () => startTide(),
-	walkTo: (x, z) => { walkTarget = { x, z }; },
-	teleport: (x, z) => { player.x = x; player.z = z; },
+	walkTo: (x, z) => walkToward({ x, z }),
+	keys,
+	joy,
+	teleport: (x, z) => { player.x = x; player.z = z; walkTarget = null; DIG.home = null; },
 	aim: (x, z) => { pointer.has = false; coil.tx = x; coil.tz = z; },
 	release: (id) => releaseCritter(CRITTERS.find((c) => c.id === id), { x: coil.x, z: coil.z, d: 0.05 }),
 	reveal: (id) => { const k = ALL.find((c) => c.id === id); cardQueue.push({ kind: k, isNew: false, depth: 12, hole: { x: coil.x, z: coil.z, ang: 0 } }); nextCard(); },
 	frameAvg: () => frameAvg,
-	step: (n, dt) => { for (let i = 0; i < n; i++) { simNow += dt * 1000; update(dt, performance.now() + simNow); } return { on: DIG.on, phase: DIG.phase, pt: DIG.pt, depth: DIG.hole && DIG.hole.depth, busy, cards: cardQueue.length }; }
+	closeCard,
+	toScreen: (x, z) => { const v = new THREE.Vector3(x, smoothGroundY(x, z), z).project(camera); return { x: (v.x + 1) / 2 * innerWidth, y: (1 - v.y) / 2 * innerHeight, behind: v.z > 1 }; },
+	under: (x, z) => waterAt(x, z, U.uTime.value).covered,
+	state: () => ({
+		player: { x: player.x, z: player.z, yaw: player.yaw }, coil: { x: coil.x, z: coil.z },
+		camYaw: camera.rotation.y, walkTarget, home: DIG.home, dig: { on: DIG.on, phase: DIG.phase, held: DIG.held, depth: DIG.hole && DIG.hole.depth },
+		busy, started, tide: !!tide, cardOpen, cards: cardQueue.length, signal: signal.s, toast: toastEl.classList.contains("show") ? toastEl.textContent : "",
+		hand: (() => { const v = handPos.clone().project(camera); return { x: (v.x + 1) / 2, y: (1 - v.y) / 2 }; })(),
+		coilOnScreen: (() => { const v = coilPos.clone().project(camera); return { x: (v.x + 1) / 2, y: (1 - v.y) / 2 }; })(),
+		holes: holes.length, found: things.filter((b) => b.found).length, WALK, REACH, REACH_MIN
+	}),
+	step: (n, dt) => { for (let i = 0; i < n; i++) update(dt); return { on: DIG.on, phase: DIG.phase, pt: DIG.pt, depth: DIG.hole && DIG.hole.depth, busy, cards: cardQueue.length }; }
 };
