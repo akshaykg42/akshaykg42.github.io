@@ -1,0 +1,1207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+	<title>Beach Detector · Weird Web October Day 1</title>
+	<meta name="description" content="Day 1 of Weird Web October (Reveal): sweep a metal detector over a beach and dig up whatever people lost there.">
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=VT323&family=Rubik:wght@500;800&display=swap" rel="stylesheet">
+	<style>
+		* { box-sizing: border-box; }
+		html, body {
+			margin: 0;
+			height: 100%;
+			overflow: hidden;
+			background: #e8d09c;
+			font-family: "Rubik", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			color: #3b2a14;
+			-webkit-user-select: none;
+			user-select: none;
+			-webkit-tap-highlight-color: transparent;
+		}
+		canvas {
+			position: fixed;
+			inset: 0;
+			display: block;
+			cursor: none;
+			touch-action: none;
+		}
+		button { font: inherit; cursor: pointer; }
+
+		/* top bar */
+		.top {
+			position: fixed;
+			top: 12px;
+			left: 12px;
+			right: 12px;
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: 8px;
+			pointer-events: none;
+		}
+		.top > * { pointer-events: auto; }
+		.tag {
+			background: rgba(255, 255, 255, 0.85);
+			border-radius: 10px;
+			padding: 6px 12px;
+			font-size: 14px;
+			box-shadow: 0 2px 0 rgba(0, 0, 0, 0.15);
+		}
+		.tag a { color: #0b6e8a; text-decoration: none; }
+		.tag a:hover { text-decoration: underline; }
+		.tag b { font-weight: 800; }
+		.buttons { display: flex; gap: 8px; }
+		.btn {
+			background: #fff;
+			border: 0;
+			border-radius: 10px;
+			padding: 6px 12px;
+			font-size: 14px;
+			font-weight: 500;
+			color: #3b2a14;
+			box-shadow: 0 2px 0 rgba(0, 0, 0, 0.2);
+		}
+		.btn:active { transform: translateY(2px); box-shadow: none; }
+
+		/* detector display */
+		.lcd {
+			position: fixed;
+			left: 12px;
+			bottom: 92px;
+			width: 168px;
+			background: #2c3a2e;
+			border: 4px solid #1b1b1b;
+			border-radius: 12px;
+			padding: 8px 10px 10px;
+			font-family: "VT323", monospace;
+			color: #b8f5a0;
+			box-shadow: 0 4px 0 rgba(0, 0, 0, 0.25);
+			pointer-events: none;
+		}
+		.lcd .row { display: flex; justify-content: space-between; align-items: baseline; }
+		.lcd .lbl { font-size: 15px; opacity: 0.6; }
+		.lcd .id { font-size: 40px; line-height: 1; }
+		.lcd .kind { font-size: 22px; }
+		.bars { display: flex; gap: 3px; margin-top: 6px; }
+		.bars i {
+			flex: 1;
+			height: 12px;
+			background: rgba(184, 245, 160, 0.15);
+			border-radius: 2px;
+		}
+		.bars i.on { background: #b8f5a0; box-shadow: 0 0 6px #b8f5a0; }
+		.bars i.on.hot { background: #ffd45e; box-shadow: 0 0 6px #ffd45e; }
+
+		/* finds tray */
+		.tray {
+			position: fixed;
+			left: 0;
+			right: 0;
+			bottom: 0;
+			height: 80px;
+			background: rgba(255, 250, 238, 0.92);
+			border-top: 3px solid #c79f5b;
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			padding: 0 12px;
+		}
+		.tray .stats {
+			flex: none;
+			font-size: 13px;
+			line-height: 1.35;
+			min-width: 112px;
+		}
+		.tray .stats b { font-size: 16px; font-weight: 800; }
+		.slots {
+			flex: 1;
+			display: flex;
+			gap: 6px;
+			overflow-x: auto;
+			padding: 6px 0;
+			scrollbar-width: thin;
+		}
+		.slot {
+			position: relative;
+			flex: none;
+			width: 44px;
+			height: 44px;
+			border-radius: 10px;
+			background: #efe1c2;
+			border: 0;
+			padding: 0;
+			font-size: 26px;
+			line-height: 44px;
+			text-align: center;
+		}
+		.slot .e { filter: brightness(0) opacity(0.18); }
+		.slot.found { background: #fff; box-shadow: 0 2px 0 #c79f5b; }
+		.slot.found .e { filter: none; }
+		.slot .n {
+			position: absolute;
+			right: -3px;
+			top: -5px;
+			background: #0b6e8a;
+			color: #fff;
+			font-size: 11px;
+			line-height: 16px;
+			min-width: 16px;
+			padding: 0 4px;
+			border-radius: 8px;
+		}
+		.slot.pop { animation: pop 0.6s; }
+		@keyframes pop {
+			0% { transform: scale(1); }
+			30% { transform: scale(1.35) rotate(-8deg); }
+			60% { transform: scale(0.95) rotate(4deg); }
+			100% { transform: scale(1); }
+		}
+
+		.dig {
+			position: fixed;
+			right: 16px;
+			bottom: 96px;
+			width: 84px;
+			height: 84px;
+			border-radius: 50%;
+			border: 0;
+			background: #ff7a3d;
+			color: #fff;
+			font-weight: 800;
+			font-size: 20px;
+			box-shadow: 0 5px 0 #b94a17;
+			display: none;
+		}
+		.dig:active { transform: translateY(4px); box-shadow: 0 1px 0 #b94a17; }
+		body.touch .dig { display: block; }
+
+		/* toast */
+		.toast {
+			position: fixed;
+			left: 50%;
+			top: 64px;
+			transform: translate(-50%, -10px);
+			background: #fff;
+			padding: 8px 16px;
+			border-radius: 999px;
+			font-size: 15px;
+			box-shadow: 0 3px 0 rgba(0, 0, 0, 0.15);
+			opacity: 0;
+			transition: opacity 0.2s, transform 0.2s;
+			pointer-events: none;
+			white-space: nowrap;
+			max-width: calc(100vw - 32px);
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+		.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+		/* find card + intro */
+		.overlay {
+			position: fixed;
+			inset: 0;
+			display: none;
+			align-items: center;
+			justify-content: center;
+			background: rgba(30, 20, 5, 0.35);
+			padding: 16px;
+		}
+		.overlay.show { display: flex; }
+		.card {
+			background: #fffaf0;
+			border-radius: 18px;
+			padding: 22px 24px 20px;
+			width: 100%;
+			max-width: 340px;
+			text-align: center;
+			box-shadow: 0 8px 0 rgba(0, 0, 0, 0.2);
+			animation: rise 0.35s cubic-bezier(0.2, 1.4, 0.4, 1);
+		}
+		@keyframes rise {
+			from { transform: translateY(30px) scale(0.85); opacity: 0; }
+			to { transform: none; opacity: 1; }
+		}
+		.card .big { font-size: 84px; line-height: 1.1; }
+		.card .tier {
+			display: inline-block;
+			font-size: 12px;
+			letter-spacing: 0.08em;
+			text-transform: uppercase;
+			padding: 2px 10px;
+			border-radius: 999px;
+			background: #efe1c2;
+			margin: 6px 0 4px;
+		}
+		.card .tier.uncommon { background: #cdeccf; }
+		.card .tier.rare { background: #c9e3ff; }
+		.card .tier.legendary { background: linear-gradient(90deg, #ffd45e, #ff8fd0, #8fd8ff); }
+		.card h2 { margin: 4px 0 6px; font-size: 24px; font-weight: 800; }
+		.card p { margin: 0 0 10px; font-size: 15px; line-height: 1.45; color: #5c4626; }
+		.card .worth { font-family: "VT323", monospace; font-size: 24px; color: #0b6e8a; }
+		.card .new { color: #ff5a1f; font-weight: 800; font-size: 13px; }
+		.card .go {
+			margin-top: 12px;
+			background: #0b6e8a;
+			color: #fff;
+			border: 0;
+			border-radius: 12px;
+			padding: 10px 22px;
+			font-weight: 800;
+			font-size: 16px;
+			box-shadow: 0 4px 0 #064a5e;
+		}
+		.card .go:active { transform: translateY(3px); box-shadow: 0 1px 0 #064a5e; }
+		.intro h1 { font-size: 30px; font-weight: 800; margin: 2px 0 8px; letter-spacing: -0.01em; }
+		.intro .big { font-size: 64px; }
+		.intro p { text-align: left; }
+	</style>
+</head>
+<body>
+	<canvas id="c"></canvas>
+
+	<div class="top">
+		<div class="tag"><a href="../">← October</a> · <b>Day 1: Reveal</b></div>
+		<div class="buttons">
+			<button class="btn" id="tideBtn" title="Bring the tide in and rebury everything">🌊 Tide</button>
+			<button class="btn" id="muteBtn">🔊</button>
+		</div>
+	</div>
+
+	<div class="lcd" aria-hidden="true">
+		<div class="row"><span class="lbl">TARGET ID</span><span class="lbl" id="depth"></span></div>
+		<div class="row"><span class="id" id="lcdId">--</span><span class="kind" id="lcdKind"></span></div>
+		<div class="bars" id="bars"></div>
+	</div>
+
+	<button class="dig" id="digBtn">DIG</button>
+
+	<div class="tray">
+		<div class="stats">
+			<div><b id="foundCount">0</b> / <span id="kindCount">0</span> found</div>
+			<div>Haul: <b id="haul">$0.00</b></div>
+			<div id="left"></div>
+		</div>
+		<div class="slots" id="slots"></div>
+	</div>
+
+	<div class="toast" id="toast"></div>
+
+	<div class="overlay show" id="introOverlay">
+		<div class="card intro">
+			<div class="big">🏖️</div>
+			<h1>Beach Detector</h1>
+			<p>People lose a lot of stuff at the beach. It's all still down there.</p>
+			<p>Sweep the detector over the sand and listen. The closer you get, the faster it beeps. Higher tones mean shinier things. <span id="digHint">Click to dig.</span></p>
+			<p>When you've cleared the beach, the tide comes in and buries something new.</p>
+			<button class="go" id="startBtn">Switch it on 🔊</button>
+		</div>
+	</div>
+
+	<div class="overlay" id="cardOverlay">
+		<div class="card" id="card"></div>
+	</div>
+
+	<script>
+	(function () {
+		"use strict";
+
+		// ---------- the stuff in the sand ----------
+		// vdi is the detector's 0-99 "target ID": iron reads low, coins and silver read high
+		var KINDS = [
+			{ id: "bolt",     e: "🔩", name: "Rusty bolt",       vdi: 6,  value: 0,       tier: "common",    text: "Fell off something important. Probably the pier." },
+			{ id: "anchor",   e: "⚓", name: "Tiny anchor",      vdi: 11, value: 3,       tier: "uncommon",  text: "Somewhere out there, a very small boat is drifting away." },
+			{ id: "clip",     e: "📎", name: "Paperclip",        vdi: 14, value: 0.01,    tier: "common",    text: "It looks like you're digging a hole. Would you like help with that?" },
+			{ id: "skeleton", e: "🗝️", name: "Skeleton key",     vdi: 24, value: 15,      tier: "uncommon",  text: "Opens one specific door, in 1887." },
+			{ id: "keys",     e: "🔑", name: "Car keys",         vdi: 28, value: 0,       tier: "common",    text: "In the parking lot, a Honda waits forever." },
+			{ id: "battery",  e: "🔋", name: "AA battery",       vdi: 33, value: 0,       tier: "common",    text: "Still 37% charged. That's more than your phone." },
+			{ id: "phone",    e: "📱", name: "Someone's phone",  vdi: 38, value: 0,       tier: "uncommon",  text: "47 missed calls from Mom." },
+			{ id: "can",      e: "🥫", name: "Soda can",         vdi: 42, value: 0.05,    tier: "common",    text: "Flavor: discontinued. Deposit: 5¢." },
+			{ id: "trophy",   e: "🏆", name: "Trophy",           vdi: 50, value: 1,       tier: "uncommon",  text: "Sandcastle Contest 2009, 3rd place (out of 3)." },
+			{ id: "watch",    e: "⌚", name: "Wristwatch",       vdi: 54, value: 35,      tier: "uncommon",  text: "Still ticking. Four hours slow, or twenty hours early." },
+			{ id: "ring",     e: "💍", name: "Wedding ring",     vdi: 58, value: 400,     tier: "rare",      text: "Engraved inside: “S + M, forever-ish.”" },
+			{ id: "compass",  e: "🧭", name: "Brass compass",    vdi: 64, value: 20,      tier: "uncommon",  text: "Points firmly at the snack bar, no matter what." },
+			{ id: "trumpet",  e: "🎺", name: "Trumpet",          vdi: 67, value: 120,     tier: "rare",      text: "Whoever owned this was mid-solo when the tide came in." },
+			{ id: "spoon",    e: "🥄", name: "Silver spoon",     vdi: 74, value: 8,       tier: "common",    text: "Someone was born with this in their mouth, then dropped it." },
+			{ id: "magnet",   e: "🧲", name: "Magnet",           vdi: 77, value: 0.5,     tier: "uncommon",  text: "Explains a lot about how the detector has been acting." },
+			{ id: "quarter",  e: "🪙", name: "Quarter",          vdi: 83, value: 0.25,    tier: "common",    text: "1979. George looks tired." },
+			{ id: "robot",    e: "🤖", name: "Robot head",       vdi: 88, value: 250,     tier: "rare",      text: "It's been whispering “beep” this whole time. Was that you or the detector?" },
+			{ id: "doubloon", e: "💰", name: "Pirate doubloons", vdi: 95, value: 12000,   tier: "rare",      text: "Arr. (That's the entire note they left.)" },
+			{ id: "crown",    e: "👑", name: "Crown",            vdi: 97, value: 50000,   tier: "legendary", text: "Property of the King of This Specific Beach. Long may he tan." },
+			{ id: "ufo",      e: "🛸", name: "Flying saucer",    vdi: 99, value: 1000000, tier: "legendary", text: "Oh. So that's where it went." }
+		];
+		var KIND = {};
+		KINDS.forEach(function (k) { KIND[k.id] = k; });
+		var WEIGHT = { common: 10, uncommon: 5, rare: 2, legendary: 0.7 };
+		var TIER_LABEL = { common: "Junk", uncommon: "Uncommon", rare: "Rare", legendary: "Legendary" };
+		var PER_BEACH = 9;
+
+		var EMPTY_LINES = [
+			"Just sand.",
+			"Sand. Some wetter sand.",
+			"You found: more beach.",
+			"Nothing. The detector looks embarrassed.",
+			"A hole! Very nice hole. Empty though.",
+			"Just a shell. Shells aren't metal.",
+			"Sand all the way down."
+		];
+
+		// ---------- setup ----------
+		var canvas = document.getElementById("c");
+		var ctx = canvas.getContext("2d");
+		var W = 0, H = 0, DPR = 1;
+		var sandTex = null;
+		var TRAY = 80;
+
+		function waterBase() { return Math.max(70, Math.min(H * 0.2, 170)); }
+
+		var rand = Math.random;
+		function rr(a, b) { return a + rand() * (b - a); }
+		function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+
+		// decorations, in fractions of the screen so they survive resizes
+		var decor = {
+			umbrella: { fx: rr(0.12, 0.35), fy: rr(0.45, 0.6) },
+			towel: { fx: rr(0.62, 0.85), fy: rr(0.5, 0.68), rot: rr(-0.5, 0.5) },
+			castle: { fx: rr(0.4, 0.6), fy: rr(0.32, 0.4) },
+			shells: [],
+			prints: { fx: rr(0.2, 0.8), curve: rr(-0.25, 0.25) }
+		};
+		for (var i = 0; i < 26; i++) {
+			decor.shells.push({ fx: rand(), fy: rand(), r: rr(2, 5), c: ["#f4e7d7", "#e9b6a0", "#d9c2a7", "#f7d6c7", "#c8b49a"][i % 5], rot: rr(0, 6.28), emoji: i < 4 ? (i % 2 ? "🐚" : "⭐") : null });
+		}
+
+		function resize() {
+			DPR = Math.min(window.devicePixelRatio || 1, 2);
+			W = window.innerWidth;
+			H = window.innerHeight;
+			canvas.width = Math.round(W * DPR);
+			canvas.height = Math.round(H * DPR);
+			canvas.style.width = W + "px";
+			canvas.style.height = H + "px";
+			buildSand();
+		}
+
+		function buildSand() {
+			sandTex = document.createElement("canvas");
+			sandTex.width = canvas.width;
+			sandTex.height = canvas.height;
+			var t = sandTex.getContext("2d");
+			var img = t.createImageData(sandTex.width, sandTex.height);
+			var d = img.data;
+			for (var p = 0; p < d.length; p += 4) {
+				var n = rand();
+				var v = (n - 0.5) * 26;
+				var speck = n > 0.985 ? -40 : n < 0.006 ? 30 : 0;
+				d[p] = 232 + v + speck;
+				d[p + 1] = 207 + v + speck;
+				d[p + 2] = 154 + v * 0.8 + speck;
+				d[p + 3] = 255;
+			}
+			t.putImageData(img, 0, 0);
+			t.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+			// soft dunes / blotches
+			for (var b = 0; b < 40; b++) {
+				var x = rand() * W, y = rand() * H, r = rr(40, 160);
+				var g = t.createRadialGradient(x, y, 0, x, y, r);
+				var dark = rand() < 0.5;
+				g.addColorStop(0, dark ? "rgba(170,130,70,0.10)" : "rgba(255,245,215,0.14)");
+				g.addColorStop(1, "rgba(0,0,0,0)");
+				t.fillStyle = g;
+				t.beginPath();
+				t.arc(x, y, r, 0, Math.PI * 2);
+				t.fill();
+			}
+			// wind ripples
+			t.strokeStyle = "rgba(150,110,60,0.08)";
+			t.lineWidth = 2;
+			for (var w = 0; w < 60; w++) {
+				var wx = rand() * W, wy = rand() * H, len = rr(30, 90);
+				t.beginPath();
+				t.moveTo(wx, wy);
+				t.quadraticCurveTo(wx + len / 2, wy - 6, wx + len, wy);
+				t.stroke();
+			}
+
+			// footprints wandering down the beach
+			var px = decor.prints.fx * W;
+			for (var y = waterBase() + 20, s = 0; y < H; y += 22, s++) {
+				var side = s % 2 ? 1 : -1;
+				var fx = px + Math.sin(y * 0.01) * 30 + (y - waterBase()) * decor.prints.curve + side * 9;
+				t.save();
+				t.translate(fx, y);
+				t.rotate(decor.prints.curve * 0.8);
+				t.fillStyle = "rgba(140,100,50,0.22)";
+				t.beginPath();
+				t.ellipse(0, 0, 5, 8, 0, 0, Math.PI * 2);
+				t.fill();
+				t.beginPath();
+				t.ellipse(0, 11, 4, 4, 0, 0, Math.PI * 2);
+				t.fill();
+				t.restore();
+			}
+
+			// shells
+			decor.shells.forEach(function (s) {
+				var sx = s.fx * W, sy = waterBase() + 30 + s.fy * (H - waterBase() - 30);
+				if (s.emoji) {
+					t.font = "18px serif";
+					t.textAlign = "center";
+					t.textBaseline = "middle";
+					t.save();
+					t.translate(sx, sy);
+					t.rotate(s.rot);
+					t.fillText(s.emoji, 0, 0);
+					t.restore();
+					return;
+				}
+				t.fillStyle = "rgba(120,90,50,0.25)";
+				t.beginPath();
+				t.ellipse(sx + 1, sy + 1.5, s.r * 1.2, s.r, s.rot, 0, Math.PI * 2);
+				t.fill();
+				t.fillStyle = s.c;
+				t.beginPath();
+				t.ellipse(sx, sy, s.r * 1.2, s.r, s.rot, 0, Math.PI * 2);
+				t.fill();
+			});
+
+			// sandcastle
+			var c = decor.castle;
+			t.font = "44px serif";
+			t.textAlign = "center";
+			t.textBaseline = "middle";
+			t.fillText("🏰", c.fx * W, c.fy * H);
+
+			// towel
+			var tw = decor.towel;
+			t.save();
+			t.translate(tw.fx * W, tw.fy * H);
+			t.rotate(tw.rot);
+			t.fillStyle = "rgba(90,60,20,0.18)";
+			t.fillRect(-52 + 6, -88 + 8, 104, 176);
+			var stripes = ["#ff6f61", "#ffd45e", "#5ec8e5", "#ffffff"];
+			for (var k = 0; k < 8; k++) {
+				t.fillStyle = stripes[k % 4];
+				t.fillRect(-52, -88 + k * 22, 104, 22);
+			}
+			t.restore();
+
+			// umbrella (from above) with its shadow
+			var u = decor.umbrella, ux = u.fx * W, uy = u.fy * H, ur = 62;
+			t.fillStyle = "rgba(90,60,20,0.2)";
+			t.beginPath();
+			t.ellipse(ux + 26, uy + 30, ur, ur * 0.9, 0, 0, Math.PI * 2);
+			t.fill();
+			for (var q = 0; q < 10; q++) {
+				t.fillStyle = q % 2 ? "#ffffff" : "#e8433a";
+				t.beginPath();
+				t.moveTo(ux, uy);
+				t.arc(ux, uy, ur, (q / 10) * Math.PI * 2, ((q + 1) / 10) * Math.PI * 2);
+				t.closePath();
+				t.fill();
+			}
+			t.fillStyle = "#7a4a1f";
+			t.beginPath();
+			t.arc(ux, uy, 5, 0, Math.PI * 2);
+			t.fill();
+		}
+
+		// places items shouldn't be buried (under the towel, umbrella, castle)
+		function blocked(x, y) {
+			var u = decor.umbrella, tw = decor.towel, c = decor.castle;
+			return Math.hypot(x - u.fx * W, y - u.fy * H) < 80 ||
+				Math.hypot(x - tw.fx * W, y - tw.fy * H) < 100 ||
+				Math.hypot(x - c.fx * W, y - c.fy * H) < 40;
+		}
+
+		// ---------- game state ----------
+		var buried = [];   // { kind, fx, fy, found }
+		var holes = [];    // { fx, fy, r, age }
+		var particles = [];
+		var risers = [];   // items popping out of holes
+		var crabs = [];
+		var coil = { x: -999, y: -999, visible: false };
+		var tide = null;   // { start }
+		var busy = false;  // a find card is open
+		var signal = { s: 0, target: null };
+
+		var finds = {};
+		try { finds = JSON.parse(localStorage.getItem("wwo-01-reveal-finds") || "{}") || {}; } catch (e) { finds = {}; }
+		function saveFinds() {
+			try { localStorage.setItem("wwo-01-reveal-finds", JSON.stringify(finds)); } catch (e) {}
+		}
+
+		function pickKind() {
+			var total = 0;
+			KINDS.forEach(function (k) { total += WEIGHT[k.tier]; });
+			var r = rand() * total;
+			for (var i = 0; i < KINDS.length; i++) {
+				r -= WEIGHT[KINDS[i].tier];
+				if (r <= 0) return KINDS[i];
+			}
+			return KINDS[0];
+		}
+
+		function bury() {
+			buried = [];
+			var top = waterBase() + 70, bottom = H - TRAY - 40;
+			for (var n = 0; n < PER_BEACH; n++) {
+				for (var tries = 0; tries < 200; tries++) {
+					var x = rr(40, W - 40), y = rr(top, bottom);
+					if (blocked(x, y)) continue;
+					var crowded = buried.some(function (b) { return Math.hypot(b.fx * W - x, b.fy * H - y) < 120; });
+					if (crowded && tries < 150) continue;
+					buried.push({ kind: pickKind(), fx: x / W, fy: y / H, found: false });
+					break;
+				}
+			}
+			updateLeft();
+		}
+
+		// ---------- audio ----------
+		var AC = null, master = null, muted = false, surfGain = null;
+
+		function startAudio() {
+			var Ctx = window.AudioContext || window.webkitAudioContext;
+			if (!Ctx) return;
+			AC = new Ctx();
+			master = AC.createGain();
+			master.gain.value = 0.9;
+			master.connect(AC.destination);
+
+			// ocean: looping brown-ish noise, low-passed, swelling slowly
+			var len = AC.sampleRate * 3;
+			var buf = AC.createBuffer(1, len, AC.sampleRate);
+			var data = buf.getChannelData(0), last = 0;
+			for (var i = 0; i < len; i++) {
+				last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02;
+				data[i] = last * 3.5;
+			}
+			var src = AC.createBufferSource();
+			src.buffer = buf;
+			src.loop = true;
+			var lp = AC.createBiquadFilter();
+			lp.type = "lowpass";
+			lp.frequency.value = 700;
+			surfGain = AC.createGain();
+			surfGain.gain.value = 0.25;
+			var lfo = AC.createOscillator();
+			lfo.frequency.value = 0.09;
+			var lfoAmt = AC.createGain();
+			lfoAmt.gain.value = 0.14;
+			lfo.connect(lfoAmt);
+			lfoAmt.connect(surfGain.gain);
+			src.connect(lp);
+			lp.connect(surfGain);
+			surfGain.connect(master);
+			src.start();
+			lfo.start();
+		}
+
+		function tone(freq, dur, type, vol, when) {
+			if (!AC) return;
+			var t0 = AC.currentTime + (when || 0);
+			var o = AC.createOscillator();
+			var g = AC.createGain();
+			o.type = type || "square";
+			o.frequency.value = freq;
+			g.gain.setValueAtTime(0, t0);
+			g.gain.linearRampToValueAtTime(vol || 0.06, t0 + 0.005);
+			g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+			o.connect(g);
+			g.connect(master);
+			o.start(t0);
+			o.stop(t0 + dur + 0.02);
+		}
+
+		function noiseBurst(dur, freq, vol, when) {
+			if (!AC) return;
+			var t0 = AC.currentTime + (when || 0);
+			var len = Math.floor(AC.sampleRate * dur);
+			var buf = AC.createBuffer(1, len, AC.sampleRate);
+			var d = buf.getChannelData(0);
+			for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+			var s = AC.createBufferSource();
+			s.buffer = buf;
+			var f = AC.createBiquadFilter();
+			f.type = "bandpass";
+			f.frequency.value = freq;
+			f.Q.value = 0.8;
+			var g = AC.createGain();
+			g.gain.value = vol;
+			s.connect(f);
+			f.connect(g);
+			g.connect(master);
+			s.start(t0);
+		}
+
+		function digSound() {
+			noiseBurst(0.12, 1400, 0.5, 0);
+			noiseBurst(0.12, 1100, 0.45, 0.13);
+			noiseBurst(0.14, 900, 0.4, 0.26);
+		}
+
+		function findJingle(tier) {
+			var notes = {
+				common: [392, 330],
+				uncommon: [523, 659, 784],
+				rare: [523, 659, 784, 1047],
+				legendary: [523, 659, 784, 1047, 784, 1047, 1319, 1568]
+			}[tier];
+			notes.forEach(function (f, i) { tone(f, 0.25, "triangle", 0.12, 0.35 + i * 0.1); });
+		}
+
+		// ---------- detector ----------
+		var DETECT_R = 140, DIG_R = 30;
+		var nextBeep = 0, beepFlash = 0;
+
+		function vdiKind(v) {
+			if (v < 20) return "IRON";
+			if (v < 35) return "FOIL";
+			if (v < 50) return "TAB";
+			if (v < 63) return "GOLD?";
+			if (v < 80) return "BRASS";
+			if (v < 90) return "COIN";
+			return "!!!";
+		}
+
+		function updateSignal() {
+			var best = 0, target = null;
+			if (coil.visible && !tide) {
+				buried.forEach(function (b) {
+					if (b.found) return;
+					var d = Math.hypot(b.fx * W - coil.x, b.fy * H - coil.y);
+					var s = 1 - d / DETECT_R;
+					if (s > best) { best = s; target = b; }
+				});
+			}
+			signal.s = best;
+			signal.target = target;
+		}
+
+		var lcdId = document.getElementById("lcdId");
+		var lcdKind = document.getElementById("lcdKind");
+		var depthEl = document.getElementById("depth");
+		var barsEl = document.getElementById("bars");
+		var bars = [];
+		for (var bi = 0; bi < 10; bi++) {
+			var bar = document.createElement("i");
+			barsEl.appendChild(bar);
+			bars.push(bar);
+		}
+		var lastLcd = "";
+		function updateLcd() {
+			var s = signal.s;
+			var lit = Math.round(s * 10);
+			var showId = s > 0.25 && signal.target;
+			// a little jitter in the reading, like the real thing
+			var id = showId ? clamp(signal.target.kind.vdi + Math.round((rand() - 0.5) * (1 - s) * 10), 0, 99) : null;
+			var key = lit + "|" + (showId ? signal.target.kind.vdi : "-");
+			if (key === lastLcd && rand() > 0.15) return;
+			lastLcd = key;
+			lcdId.textContent = showId ? (id < 10 ? "0" + id : id) : "--";
+			lcdKind.textContent = showId ? vdiKind(signal.target.kind.vdi) : "";
+			depthEl.textContent = s > 0.8 ? "DIG!" : "";
+			bars.forEach(function (b, i) {
+				b.className = i < lit ? (i >= 8 ? "on hot" : "on") : "";
+			});
+		}
+
+		function beepTick(now) {
+			var s = signal.s;
+			if (s <= 0.02 || !signal.target || busy) return;
+			if (now < nextBeep) return;
+			var base = 200 + signal.target.kind.vdi * 9;
+			tone(base * (1 + 0.25 * s), 0.05 + 0.04 * s, "square", 0.035 + 0.05 * s);
+			beepFlash = 1;
+			nextBeep = now + (720 - 650 * Math.pow(s, 0.7));
+		}
+
+		// ---------- digging ----------
+		function dig(x, y) {
+			if (busy || tide || !started) return;
+			if (y < waterLine(x, performance.now() / 1000) + 10) {
+				toast("That's the ocean. You can't dig the ocean.");
+				return;
+			}
+			if (y > H - TRAY - 6) return;
+
+			var hit = null, hd = Infinity;
+			buried.forEach(function (b) {
+				if (b.found) return;
+				var d = Math.hypot(b.fx * W - x, b.fy * H - y);
+				if (d < DIG_R && d < hd) { hit = b; hd = d; }
+			});
+
+			var hx = hit ? hit.fx * W : x, hy = hit ? hit.fy * H : y;
+			holes.push({ fx: hx / W, fy: hy / H, r: rr(16, 20), age: 0 });
+			if (holes.length > 70) holes.shift();
+			for (var i = 0; i < 26; i++) {
+				var a = rr(0, Math.PI * 2), sp = rr(40, 160);
+				particles.push({ x: hx, y: hy, z: 0, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * 0.6, vz: rr(80, 220), life: 1 });
+			}
+			digSound();
+
+			if (hit) {
+				hit.found = true;
+				busy = true;
+				risers.push({ kind: hit.kind, x: hx, y: hy, t: 0 });
+				findJingle(hit.kind.tier);
+				var isNew = !finds[hit.kind.id];
+				finds[hit.kind.id] = (finds[hit.kind.id] || 0) + 1;
+				saveFinds();
+				setTimeout(function () { showCard(hit.kind, isNew, true); }, 900);
+			} else {
+				tone(110, 0.18, "sine", 0.15, 0.3);
+				if (rand() < 0.14) {
+					crabs.push({ x: hx, y: hy, dir: rand() < 0.5 ? -1 : 1, t: 0 });
+					toast("A crab! It is not metal. It is furious.");
+				} else {
+					toast(EMPTY_LINES[Math.floor(rand() * EMPTY_LINES.length)]);
+				}
+			}
+		}
+
+		// ---------- tide ----------
+		function startTide() {
+			if (tide || busy) return;
+			tide = { start: performance.now(), swapped: false };
+			if (surfGain && AC) {
+				var t0 = AC.currentTime;
+				surfGain.gain.cancelScheduledValues(t0);
+				surfGain.gain.setValueAtTime(surfGain.gain.value, t0);
+				surfGain.gain.linearRampToValueAtTime(0.7, t0 + 2.2);
+				surfGain.gain.linearRampToValueAtTime(0.25, t0 + 5);
+			}
+		}
+		var TIDE_IN = 2200, TIDE_HOLD = 500, TIDE_OUT = 2400;
+
+		function tideOffset(now) {
+			if (!tide) return 0;
+			var t = now - tide.start;
+			var full = H - waterBase() + 60;
+			if (t < TIDE_IN) {
+				var a = t / TIDE_IN;
+				return full * (a * a * (3 - 2 * a));
+			}
+			if (t < TIDE_IN + TIDE_HOLD) {
+				if (!tide.swapped) {
+					tide.swapped = true;
+					holes = [];
+					crabs = [];
+					bury();
+				}
+				return full;
+			}
+			if (t < TIDE_IN + TIDE_HOLD + TIDE_OUT) {
+				var b = (t - TIDE_IN - TIDE_HOLD) / TIDE_OUT;
+				return full * (1 - b * b * (3 - 2 * b));
+			}
+			tide = null;
+			toast("The tide went out. New stuff washed in.");
+			return 0;
+		}
+
+		var tideNow = 0;
+		function waterLine(x, t) {
+			return waterBase() + 7 * Math.sin(x * 0.011 + t * 0.9) + 5 * Math.sin(x * 0.027 - t * 1.4) + 16 * Math.sin(t * 0.55) + tideNow;
+		}
+
+		// ---------- drawing ----------
+		function drawHoles() {
+			holes.forEach(function (h) {
+				var x = h.fx * W, y = h.fy * H, r = h.r;
+				var grow = Math.min(1, h.age / 0.25);
+				// spoil pile
+				ctx.fillStyle = "#f1dcad";
+				ctx.beginPath();
+				ctx.ellipse(x + r * 1.2, y + r * 0.5, r * 0.9 * grow, r * 0.55 * grow, 0.3, 0, Math.PI * 2);
+				ctx.fill();
+				ctx.fillStyle = "rgba(120,85,40,0.25)";
+				ctx.beginPath();
+				ctx.ellipse(x + r * 1.35, y + r * 0.75, r * 0.7 * grow, r * 0.35 * grow, 0.3, 0, Math.PI * 2);
+				ctx.fill();
+				// the hole
+				ctx.fillStyle = "#a07a3f";
+				ctx.beginPath();
+				ctx.ellipse(x, y, r * grow, r * 0.7 * grow, 0, 0, Math.PI * 2);
+				ctx.fill();
+				ctx.fillStyle = "#6e4f22";
+				ctx.beginPath();
+				ctx.ellipse(x + 1, y + 2, r * 0.7 * grow, r * 0.45 * grow, 0, 0, Math.PI * 2);
+				ctx.fill();
+			});
+		}
+
+		function drawParticles(dt) {
+			ctx.fillStyle = "#d8b878";
+			particles = particles.filter(function (p) {
+				p.vz -= 600 * dt;
+				p.x += p.vx * dt;
+				p.y += p.vy * dt;
+				p.z += p.vz * dt;
+				if (p.z <= 0) { p.z = 0; p.vx *= 0.5; p.vy *= 0.5; p.vz = 0; p.life -= dt * 2; }
+				ctx.globalAlpha = clamp(p.life, 0, 1);
+				ctx.fillRect(p.x - 1.5, p.y - p.z - 1.5, 3, 3);
+				return p.life > 0;
+			});
+			ctx.globalAlpha = 1;
+		}
+
+		function drawRisers(dt, now) {
+			risers = risers.filter(function (r) {
+				r.t += dt;
+				var a = Math.min(1, r.t / 0.7);
+				var ease = 1 - Math.pow(1 - a, 3);
+				var y = r.y - 40 * ease;
+				// rays
+				ctx.save();
+				ctx.translate(r.x, y);
+				ctx.rotate(now / 900);
+				ctx.globalAlpha = 0.55 * ease;
+				ctx.fillStyle = r.kind.tier === "legendary" ? "#ff8fd0" : "#fff3b0";
+				for (var k = 0; k < 10; k++) {
+					ctx.rotate(Math.PI / 5);
+					ctx.beginPath();
+					ctx.moveTo(0, 0);
+					ctx.lineTo(-7, 60);
+					ctx.lineTo(7, 60);
+					ctx.closePath();
+					ctx.fill();
+				}
+				ctx.restore();
+				ctx.globalAlpha = 1;
+				ctx.font = Math.round(18 + 26 * ease) + "px serif";
+				ctx.textAlign = "center";
+				ctx.textBaseline = "middle";
+				ctx.fillText(r.kind.e, r.x, y + Math.sin(now / 200) * 2);
+				return busy;
+			});
+		}
+
+		function drawCrabs(dt) {
+			crabs = crabs.filter(function (c) {
+				c.t += dt;
+				c.x += c.dir * 180 * dt;
+				ctx.font = "26px serif";
+				ctx.textAlign = "center";
+				ctx.textBaseline = "middle";
+				ctx.fillText("🦀", c.x, c.y + Math.sin(c.t * 30) * 2);
+				return c.x > -40 && c.x < W + 40;
+			});
+		}
+
+		function drawWater(t) {
+			var step = 8;
+			// wet sand left behind by the swash
+			ctx.beginPath();
+			ctx.moveTo(0, 0);
+			for (var x = 0; x <= W + step; x += step) {
+				ctx.lineTo(x, waterLine(x, t) + 26 + 16 * (1 - Math.sin(t * 0.55)) * 0.5 + 6 * Math.sin(x * 0.02));
+			}
+			ctx.lineTo(W, 0);
+			ctx.closePath();
+			ctx.fillStyle = "rgba(150,110,55,0.18)";
+			ctx.fill();
+
+			// the sea
+			var g = ctx.createLinearGradient(0, 0, 0, waterBase() + tideNow + 30);
+			g.addColorStop(0, "#1f6fa8");
+			g.addColorStop(0.6, "#2c9cc4");
+			g.addColorStop(1, "#5fd0d6");
+			ctx.beginPath();
+			ctx.moveTo(0, 0);
+			for (x = 0; x <= W + step; x += step) ctx.lineTo(x, waterLine(x, t));
+			ctx.lineTo(W, 0);
+			ctx.closePath();
+			ctx.fillStyle = g;
+			ctx.fill();
+
+			// foam
+			ctx.lineJoin = "round";
+			ctx.strokeStyle = "rgba(255,255,255,0.9)";
+			ctx.lineWidth = 5;
+			ctx.beginPath();
+			for (x = 0; x <= W + step; x += step) {
+				var y = waterLine(x, t);
+				x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+			}
+			ctx.stroke();
+			ctx.strokeStyle = "rgba(255,255,255,0.35)";
+			ctx.lineWidth = 3;
+			ctx.beginPath();
+			for (x = 0; x <= W + step; x += step) {
+				y = waterLine(x, t) - 14 - 5 * Math.sin(x * 0.03 + t * 2);
+				x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+			}
+			ctx.stroke();
+
+			// glints
+			ctx.fillStyle = "rgba(255,255,255,0.5)";
+			for (var k = 0; k < 18; k++) {
+				var gx = ((k * 137.5 + t * (12 + (k % 5) * 4)) % (W + 40)) - 20;
+				var gy = (k * 29) % Math.max(20, waterBase() + tideNow - 30);
+				var ga = 0.5 + 0.5 * Math.sin(t * 2 + k);
+				ctx.globalAlpha = ga * 0.6;
+				ctx.fillRect(gx, gy + 6, 10, 2);
+			}
+			ctx.globalAlpha = 1;
+		}
+
+		function drawCoil(now) {
+			if (!coil.visible || busy) return;
+			var x = coil.x, y = coil.y, s = signal.s;
+			// shadow
+			ctx.fillStyle = "rgba(60,40,10,0.18)";
+			ctx.beginPath();
+			ctx.ellipse(x + 10, y + 12, 28, 21, 0, 0, Math.PI * 2);
+			ctx.fill();
+			ctx.strokeStyle = "rgba(60,40,10,0.18)";
+			ctx.lineWidth = 6;
+			ctx.beginPath();
+			ctx.moveTo(x + 30, y + 30);
+			ctx.lineTo(x + 100, y + 122);
+			ctx.stroke();
+			// shaft + handle
+			ctx.strokeStyle = "#555";
+			ctx.lineWidth = 6;
+			ctx.lineCap = "round";
+			ctx.beginPath();
+			ctx.moveTo(x + 14, y + 10);
+			ctx.lineTo(x + 86, y + 104);
+			ctx.stroke();
+			ctx.strokeStyle = "#222";
+			ctx.lineWidth = 9;
+			ctx.beginPath();
+			ctx.moveTo(x + 62, y + 72);
+			ctx.lineTo(x + 86, y + 104);
+			ctx.stroke();
+			// control box
+			ctx.fillStyle = "#ff7a3d";
+			ctx.save();
+			ctx.translate(x + 50, y + 56);
+			ctx.rotate(0.92);
+			ctx.fillRect(-9, -6, 18, 12);
+			ctx.fillStyle = beepFlash > 0.3 ? "#b8f5a0" : "#2c3a2e";
+			ctx.fillRect(-5, -3, 10, 6);
+			ctx.restore();
+			// glow
+			if (s > 0) {
+				ctx.strokeStyle = "rgba(184,245,160," + (0.25 + 0.6 * s * beepFlash) + ")";
+				ctx.lineWidth = 6 + 10 * beepFlash * s;
+				ctx.beginPath();
+				ctx.ellipse(x, y, 26, 20, 0, 0, Math.PI * 2);
+				ctx.stroke();
+			}
+			// coil
+			ctx.fillStyle = "rgba(255,255,255,0.12)";
+			ctx.strokeStyle = "#2b2b2b";
+			ctx.lineWidth = 5;
+			ctx.beginPath();
+			ctx.ellipse(x, y, 26, 20, 0, 0, Math.PI * 2);
+			ctx.fill();
+			ctx.stroke();
+			ctx.strokeStyle = "#ffd45e";
+			ctx.lineWidth = 1.5;
+			ctx.beginPath();
+			ctx.ellipse(x, y, 20, 14.5, 0, 0, Math.PI * 2);
+			ctx.stroke();
+		}
+
+		var last = performance.now();
+		function frame(now) {
+			var dt = Math.min(0.05, (now - last) / 1000);
+			last = now;
+			var t = now / 1000;
+			tideNow = tideOffset(now);
+
+			ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+			ctx.drawImage(sandTex, 0, 0, W, H);
+			holes.forEach(function (h) { h.age += dt; });
+			drawHoles();
+			drawCrabs(dt);
+			drawParticles(dt);
+			drawRisers(dt, now);
+			drawWater(t);
+
+			updateSignal();
+			beepTick(now);
+			beepFlash = Math.max(0, beepFlash - dt * 6);
+			drawCoil(now);
+			updateLcd();
+
+			requestAnimationFrame(frame);
+		}
+
+		// ---------- UI ----------
+		var toastEl = document.getElementById("toast"), toastTimer = null;
+		function toast(msg) {
+			toastEl.textContent = msg;
+			toastEl.classList.add("show");
+			clearTimeout(toastTimer);
+			toastTimer = setTimeout(function () { toastEl.classList.remove("show"); }, 2200);
+		}
+
+		function money(v) {
+			return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+		}
+
+		var slotsEl = document.getElementById("slots");
+		var slotEls = {};
+		KINDS.forEach(function (k) {
+			var b = document.createElement("button");
+			b.className = "slot";
+			b.innerHTML = '<span class="e">' + k.e + "</span>";
+			b.addEventListener("click", function () {
+				if (finds[k.id] && !busy && !tide) showCard(k, false, false);
+			});
+			slotsEl.appendChild(b);
+			slotEls[k.id] = b;
+		});
+		document.getElementById("kindCount").textContent = KINDS.length;
+
+		function renderTray(popId) {
+			var count = 0, haul = 0;
+			KINDS.forEach(function (k) {
+				var n = finds[k.id] || 0, el = slotEls[k.id];
+				el.classList.toggle("found", n > 0);
+				el.title = n ? k.name : "???";
+				var badge = el.querySelector(".n");
+				if (n > 1) {
+					if (!badge) { badge = document.createElement("span"); badge.className = "n"; el.appendChild(badge); }
+					badge.textContent = n;
+				} else if (badge) badge.remove();
+				if (n) count++;
+				haul += n * k.value;
+			});
+			document.getElementById("foundCount").textContent = count;
+			document.getElementById("haul").textContent = money(haul);
+			if (popId) {
+				var el = slotEls[popId];
+				el.classList.remove("pop");
+				void el.offsetWidth;
+				el.classList.add("pop");
+				el.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+			}
+		}
+
+		function updateLeft() {
+			var left = buried.filter(function (b) { return !b.found; }).length;
+			document.getElementById("left").textContent = left ? left + " still buried here" : "Beach cleared!";
+		}
+
+		var cardOverlay = document.getElementById("cardOverlay");
+		var cardEl = document.getElementById("card");
+		var pendingPop = null;
+
+		function showCard(k, isNew, fresh) {
+			busy = true;
+			pendingPop = fresh ? k.id : null;
+			cardEl.innerHTML =
+				'<div class="big">' + k.e + "</div>" +
+				(isNew ? '<div class="new">NEW FIND!</div>' : "") +
+				'<div class="tier ' + k.tier + '">' + TIER_LABEL[k.tier] + "</div>" +
+				"<h2>" + k.name + "</h2>" +
+				"<p>" + k.text + "</p>" +
+				'<div class="worth">' + (k.value ? "Worth " + money(k.value) : "Worth nothing. Keep it anyway.") + "</div>" +
+				'<button class="go" id="pocket">' + (fresh ? "Pocket it" : "Nice") + "</button>";
+			// re-trigger the pop-in animation
+			cardEl.style.animation = "none";
+			void cardEl.offsetWidth;
+			cardEl.style.animation = "";
+			cardOverlay.classList.add("show");
+			var btn = document.getElementById("pocket");
+			btn.addEventListener("click", closeCard);
+			btn.focus();
+		}
+
+		function closeCard() {
+			cardOverlay.classList.remove("show");
+			busy = false;
+			renderTray(pendingPop);
+			if (pendingPop) {
+				updateLeft();
+				if (buried.every(function (b) { return b.found; })) {
+					toast("Beach cleared! Here comes the tide…");
+					setTimeout(startTide, 1400);
+				}
+			}
+			pendingPop = null;
+		}
+		cardOverlay.addEventListener("click", function (e) { if (e.target === cardOverlay) closeCard(); });
+
+		// ---------- input ----------
+		var started = false;
+		var isTouch = false;
+
+		canvas.addEventListener("pointermove", function (e) {
+			moveCoil(e);
+		});
+		canvas.addEventListener("pointerdown", function (e) {
+			moveCoil(e);
+			if (e.pointerType === "mouse" || e.pointerType === "pen") dig(coil.x, coil.y);
+		});
+		canvas.addEventListener("pointerleave", function (e) {
+			if (e.pointerType === "mouse" && !isTouch) coil.visible = false;
+		});
+		function moveCoil(e) {
+			if (e.pointerType === "touch") {
+				if (!isTouch) { isTouch = true; document.body.classList.add("touch"); }
+				// keep the coil above your finger so you can see it
+				coil.x = e.clientX;
+				coil.y = e.clientY - 70;
+			} else {
+				coil.x = e.clientX;
+				coil.y = e.clientY;
+			}
+			coil.visible = true;
+		}
+		document.getElementById("digBtn").addEventListener("click", function () {
+			if (coil.visible) dig(coil.x, coil.y);
+			else toast("Drag on the sand to sweep the detector first.");
+		});
+		window.addEventListener("keydown", function (e) {
+			if (e.code === "Space" && !busy && started) { e.preventDefault(); dig(coil.x, coil.y); }
+			if (e.code === "Escape" && busy && cardOverlay.classList.contains("show")) closeCard();
+		});
+
+		var muteBtn = document.getElementById("muteBtn");
+		muteBtn.addEventListener("click", function () {
+			muted = !muted;
+			muteBtn.textContent = muted ? "🔇" : "🔊";
+			if (master) master.gain.value = muted ? 0 : 0.9;
+		});
+		document.getElementById("tideBtn").addEventListener("click", function () {
+			if (!started) return;
+			startTide();
+		});
+
+		if (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) {
+			isTouch = true;
+			document.body.classList.add("touch");
+			document.getElementById("digHint").textContent = "Drag to sweep, then tap DIG.";
+		}
+
+		document.getElementById("startBtn").addEventListener("click", function () {
+			document.getElementById("introOverlay").classList.remove("show");
+			started = true;
+			try { startAudio(); } catch (e) {}
+			if (isTouch) {
+				coil.x = W / 2;
+				coil.y = (waterBase() + H - TRAY) / 2;
+				coil.visible = true;
+			}
+		});
+
+		window.addEventListener("resize", resize);
+		resize();
+		bury();
+		renderTray();
+		requestAnimationFrame(frame);
+	})();
+	</script>
+</body>
+</html>

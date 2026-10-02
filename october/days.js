@@ -4,7 +4,7 @@
 // To publish a day: make a folder like october/03-fake/ with an index.html,
 // then set that day's `url` below, e.g. url: "03-fake/".
 window.WWO_DAYS = [
-  { day: 1,  theme: "Reveal" },
+  { day: 1,  theme: "Reveal", url: "01-reveal/" },
   { day: 2,  theme: "Spark" },
   { day: 3,  theme: "Fake" },
   { day: 4,  theme: "Plastic" },
